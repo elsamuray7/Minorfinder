@@ -8,5 +8,5 @@
 # it in the Makefile because it will be worse than useless if it
 # ever fails to compile, so it's important that it should actually
 # be built on a regular basis.
-minorsearcher : [X] GTK COMMON minorsearcher minorsearcher-icon|no-icon
-minorsearcher : [G] WINDOWS COMMON minorsearcher minorsearcher.res|noicon.res
+minorfinder : [X] GTK COMMON minorfinder minorfinder-icon|no-icon
+minorfinder : [G] WINDOWS COMMON minorfinder minorfinder.res|noicon.res
