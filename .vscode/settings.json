@@ -7,6 +7,21 @@
         "memory": "c",
         "ostream": "c",
         "streambuf": "c",
-        "tuple": "c"
+        "tuple": "c",
+        "cstdlib": "c",
+        "string": "c",
+        "exception": "c",
+        "memory_resource": "c",
+        "fstream": "c",
+        "new": "c",
+        "sstream": "c",
+        "string_view": "c",
+        "typeinfo": "c",
+        "utility": "c",
+        "deque": "c",
+        "list": "c",
+        "vector": "c",
+        "optional": "c",
+        "type_traits": "c"
     }
 }
