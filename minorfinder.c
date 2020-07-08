@@ -23,6 +23,7 @@
 
 /* type alias for an unsigned integer */
 #define uint unsigned int
+
 /* type alias for an unsigned long */
 #define ulong unsigned long
 
@@ -31,53 +32,90 @@ enum {
     NCOLOURS
 };
 
+/*
+ * A point in a grid, spefified by its coordinates and its
+ * respective denominator.
+ */
 typedef struct point {
-    // rational coordinate
-    long x, y;
-    // denominator
-    long d;
+
+    // rational x coordinate
+    ulong x;
+    // rational y coordinate
+    ulong y;
+
+    // shared denominator
+    ulong d;
+
 } point;
 
+/* A vertex that corresponds to a point in a graph. */
+typedef struct vertex {
+
+    // index in the points array
+    int idx;
+
+    // number of incident edges
+    int deg;
+
+} vertex;
+
+/*
+ * An edge that connects to points of a graph.
+ * Edges are stored in such a way that src < tgt
+ * holds true.
+ */
 typedef struct edge {
-    /* always store smaller indices in s, e.g. s < t */
 
     // source
-    int s;
+    int src;
+
     // target
-    int t;
+    int tgt;
+
 } edge;
 
+/*
+ * An undirected graph that consists of a a set of points/vertices
+ * and a set of edges that interconnect these points.
+ */
 typedef struct graph {
+
     // reference count for deallocation
     int refcount;
-    // 234-tree containing all the edges of the graph
+
+    // point array
+    point* points;
+
+    // edge 234-tree
     tree234* edges;
+
 } graph;
 
 struct game_params {
+
     // number of nodes of the original graph
     int n_base;
     // number of nodes of the minor graph
     int n_min;
+
 };
 
 struct game_state {
+
     game_params params;
 
-    // grid size
-    int widht, height;
+    int width;
+    int height;
 
-    point* pts_min;
-    point* pts_rest;
-
-    graph* graph_base;
-    graph* graph_min;
+    graph* base;
+    graph* minor;
 
     bool solved;
+
 };
 
 struct game_ui {
-    /* not implemented yet */
+    // not implemented yet
 };
 
 static game_params *default_params(void)
@@ -121,9 +159,6 @@ static bool game_fetch_preset(int i, char **name, game_params **params)
     ret = snew(game_params);
     ret->n_base = n_base;
     ret->n_min = n_min;
-    /* params is a double pointer, hence the pointer which params
-     * points to and ret will point to the same memory object of
-     * the type game_params. */
     *params = ret;
     
     return true;
@@ -165,25 +200,43 @@ static const char *validate_params(const game_params *params, bool full)
     return NULL;
 }
 
+/*
+ * 
+ * The functions and structures below are copied from the untangle
+ * backend.
+ * 
+ * 
+ * 
+ * 
+ * 
+ * 
+ * 
+ * 
+ * 
+ * 
+ * 
+ * 
+ * 
+ * 
+ * 
+ */
+
 /* ----------------------------------------------------------------------
  * Small number of 64-bit integer arithmetic operations, to prevent
  * integer overflow at the very core of cross().
- * 
- * Taken from untangle since we need to check for crossing lines while
- * generating a new random start for our game just like untangle does.
  */
 
 typedef struct {
     long hi;
-    unsigned long lo;
+    ulong lo;
 } int64;
 
 #define greater64(i,j) ( (i).hi>(j).hi || ((i).hi==(j).hi && (i).lo>(j).lo))
 #define sign64(i) ((i).hi < 0 ? -1 : (i).hi==0 && (i).lo==0 ? 0 : +1)
 
-static int64 mulu32to64(unsigned long x, unsigned long y)
+static int64 mulu32to64(ulong x, ulong y)
 {
-    unsigned long a, b, c, d, t;
+    ulong a, b, c, d, t;
     int64 ret;
 
     a = (x & 0xFFFF) * (y & 0xFFFF);
@@ -203,8 +256,8 @@ static int64 mulu32to64(unsigned long x, unsigned long y)
 	ret.hi++;
 
 #ifdef DIAGNOSTIC_VIA_LONGLONG
-    assert(((unsigned long long)ret.hi << 32) + ret.lo ==
-	   (unsigned long long)x * y);
+    assert(((ulong long)ret.hi << 32) + ret.lo ==
+	   (ulong long)x * y);
 #endif
 
     return ret;
@@ -233,7 +286,7 @@ static int64 mul32to64(long x, long y)
     }
 
 #ifdef DIAGNOSTIC_VIA_LONGLONG
-    assert(((unsigned long long)ret.hi << 32) + ret.lo == realret);
+    assert(((ulong long)ret.hi << 32) + ret.lo == realret);
 #endif
 
     return ret;
@@ -340,7 +393,24 @@ static bool cross(point a1, point a2, point b1, point b2)
     return true;
 }
 
-/* -------------------------------------------------------------------- */   
+static ulong squarert(ulong n) {
+    ulong d, a, b, di;
+
+    d = n;
+    a = 0;
+    b = 1L << 30;		       /* largest available power of 4 */
+    do {
+        a >>= 1;
+        di = 2*a + b;
+        if (di <= d) {
+            d -= di;
+            a += b;
+        }
+        b >>= 2;
+    } while (b);
+
+    return a;
+}
 
 /*
  * Our solutions are arranged on a square grid big enough that n
@@ -350,20 +420,246 @@ static bool cross(point a1, point a2, point b1, point b2)
 #define MAXDEGREE 4
 #define COORDLIMIT(n) squarert((n) * POINTDENSITY)
 
-#define right_grid_x(x, w) (w >> 1) + x
-#define right_grid_y(y, w) (w >> 1) + y
+static void addedge(tree234 *edges, int s, int t)
+{
+    edge *e = snew(edge);
+
+    assert(s != t);
+
+    e->src = min(s, t);
+    e->tgt = max(s, t);
+
+    add234(edges, e);
+}
+
+static bool isedge(tree234 *edges, int s, int t)
+{
+    edge e;
+
+    assert(s != t);
+
+    e.src = min(s, t);
+    e.tgt = max(s, t);
+
+    return find234(edges, &e, NULL) != NULL;
+}
+
+static int edgecmpC(const void *av, const void *bv)
+{
+    const edge *a = (const edge *)av;
+    const edge *b = (const edge *)bv;
+
+    if (a->src < b->src)
+	return -1;
+    else if (a->src > b->src)
+	return +1;
+    else if (a->tgt < b->tgt)
+	return -1;
+    else if (a->tgt > b->tgt)
+	return +1;
+    return 0;
+}
+
+static int edgecmp(void *av, void *bv)
+{
+    return edgecmpC(av, bv);
+}
+
+static int vertcmpC(const void *av, const void *bv)
+{
+    const vertex *a = (vertex *)av;
+    const vertex *b = (vertex *)bv;
+
+    if (a->deg < b->deg)
+	return -1;
+    else if (a->deg > b->deg)
+	return +1;
+    else if (a->idx < b->idx)
+	return -1;
+    else if (a->idx > b->idx)
+	return +1;
+    return 0;
+}
+
+static int vertcmp(void *av, void *bv)
+{
+    return vertcmpC(av, bv);
+}
+
+/*
+ * 
+ * 
+ * 
+ * 
+ * 
+ * 
+ * 
+ * 
+ * 
+ * 
+ * 
+ * 
+ * 
+ * 
+ * 
+ * The functions and structures above are copied from the untangle
+ * backend.
+ * 
+ */
+
+#define COORDMARGIN(l) ((l) / 10);
 
 static char *new_game_desc(const game_params *params, random_state *rs,
 			   char **aux, bool interactive)
 {
     int n_min = params->n_min;
     int n_base = params->n_base;
-    long width;
-    long height;
-    tree234* edges;
-    tree234* vertices;
+    int coord_lim;
+    int coord_mar;
+    int width;
+    int height;
+    point* pts_base;
+    point* pts_min;
+    tree234* edges_base;
+    tree234* edges_min;
     char* ret;
+
+    /*
+     * Set the coordlimit of our grids in x and y direction and set the
+     * width and height of our game. The width will be two times the
+     * coordlimit because we will draw the base graph and its minor in
+     * separate grids, one on the left hand side and one on the right.
+     */
+    coord_lim = COORDLIMIT(n_base);
+    width = coord_lim << 1;
+    height = coord_lim;
+    coord_mar = COORDMARGIN(coord_lim);
+
+    // Allocate memory for n_base points
+    pts_min = snewn(n_min, point);
     
+    /*
+     * Generate random coordinates for the points of the minor graph.
+     * The coorinates will be in the range (coord_mar, coord_lim - coord_mar).
+     */
+    ulong* coords_x = snewn(coord_lim - (coord_mar << 1), ulong);
+    ulong* coords_y = snewn(coord_lim - (coord_mar << 1), ulong);
+    for (int i = coord_mar + 1; i < coord_lim - coord_mar; i++)
+    {
+        *(coords_x + i) = i;
+        *(coords_y + i) = i;
+    }
+    shuffle(coords_x, coord_lim - (coord_mar << 1), sizeof(ulong), rs);
+    shuffle(coords_y, coord_lim - (coord_mar << 1), sizeof(ulong), rs);
+    for (int i = 0; i < n_min; i++)
+    {
+        point* pt = pts_min + i;
+        pt->x = *(coords_x + i) + coord_mar;
+        pt->y = *(coords_y + i) + coord_mar;
+        pt->d = 1;
+    }
+    sfree(coords_x);
+    sfree(coords_y);
+
+    // TODO check code below, try to make use of the sorted 234-trees to
+    //      avoid the 3 for-loosps!
+    
+    // allocate memory for n_min vertices
+    vertex* vtcs_min = snewn(n_min, vertex);
+    // create new 234-trees which store vertices and edges
+    tree234* vtcs_min_234 = newtree234(vertcmp);
+    edges_min = newtree234(edgecmp);
+
+    /*
+     * Add edges to the minor graph. Make sure that new edges do not cross
+     * existing ones and that the degree of the incident vertices does not
+     * increase beyond MAXDEGREE.
+     */
+    for (int i = 0; i < n_min; i++)
+    {
+        vertex* vx = vtcs_min + i;
+        vx->idx = i;
+        vx->deg = 0;
+        add234(vtcs_min_234, vx);
+    }
+
+    // keep adding edges untill there are less than 2 vertices left
+    int cnt = n_min;
+    while (cnt >= 2)
+    {
+        /*
+         * Retrieve the vertex with the highest degree from the vertice 234-tree
+         * and try to add new edges that are incident to it. We do not have to
+         * check the vertex's degree here since we delete vertices with a degree
+         * equal to MAXDEGREE after adding new edges that are incident to them.
+         */
+        vertex* vxa = delpos234(vtcs_min_234, 0);
+        cnt--;
+
+        for (int i = cnt - 1; i >= 1;)
+        {
+            /*
+             * Retrieve the vertex with the lowest degree from the vertice 234-tree
+             * and try to add a new edge that connects it with vxa. Check for
+             * exisitance and crossing before adding a new edge.
+             */
+            vertex* vxb = index234(vtcs_min_234, i);
+            if (isedge(edges_min, vxa->idx, vxb->idx))
+            {
+                // the edge exists, increase index and move on
+                i++;
+                continue;
+            }
+
+            edge* e;
+            bool crosses = false;
+            for (int j = 0; (e = index234(edges_min, j)) != NULL; j++)
+            {
+                point pta = *(pts_min + vxa->idx);
+                point ptb = *(pts_min + vxb->idx);
+                point ptes = *(pts_min + e->src);
+                point ptet = *(pts_min + e-> tgt);
+                if ((crosses = cross(pta, ptb, ptes, ptet))) break; // the edge crosses an existing edge
+            }
+
+            if (!crosses)
+            {
+                // the edge does not cross an existing edge, update the vertices and add it
+                delpos234(vtcs_min_234, i);
+                addedge(edges_min, vxa->idx, vxb->idx);
+                if (++(vxa->deg) >= MAXDEGREE) break;
+                if(++(vxb->deg) < MAXDEGREE)
+                {
+                    // the vertex degree is still smaller than MAXDEGREE, add it again
+                    add234(vtcs_min_234, vxb);
+                    // do not increase index such that no vertices will be skipped
+                }
+                else
+                {
+                    // the vertex degree has reached MAXDEGREE, decrease count and increase index
+                    cnt--;
+                    i++;
+                }
+            }
+            else
+            {
+                i++;
+            }
+        }
+    }
+    sfree(vtcs_min);
+    vertex* vx;
+    while ((vx = delpos234(vtcs_min_234, 0)) != NULL) sfree(vx);
+    freetree234(vtcs_min_234);
+
+    sfree(pts_base);
+    sfree(pts_min);
+    edge* e;
+    while ((e = delpos234(edges_base, 0)) != NULL) sfree(e);
+    freetree234(edges_base);
+    while ((e = delpos234(edges_min, 0)) != NULL) sfree(e);
+    freetree234(edges_min);
+
     return dupstr("FIXME");
 }
 
