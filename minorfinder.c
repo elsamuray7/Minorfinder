@@ -515,7 +515,7 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     edge* e;
     /*tree234* edges_base;*/
     tree234* edges_min;
-    char* ret;
+    /*char* ret;*/
 
     int cnt;
     int i;
@@ -648,21 +648,22 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     while ((vx = delpos234(vtcs_min_234, 0)) != NULL) sfree(vx);
     freetree234(vtcs_min_234);
 
-    ret = NULL;
-    cnt = count234(edges_min);
+    /*ret = NULL;*/
+    /*cnt = count234(edges_min);*/
     {
-    int retlen = 0;
-    char buf[80];
-    int off;
+    /*int retlen = 0;*/
+    /*char buf[80];*/
+    /*int off;*/
     edge* edges = snewn(cnt, edge);
 
     for (i = 0; (e = index234(edges_min, i)) != NULL; i++)
     {
         *(edges + i) = *e;
         e = edges + i;
-        retlen += (sprintf(buf, "%d-%d", e->src, e->tgt) + 1);
+        printf("%d-%d", e->src, e->tgt);
+        /*retlen += (sprintf(buf, "%d-%d", e->src, e->tgt) + 1);*/
     }
-    ret = snewn(retlen, char);
+    /*ret = snewn(retlen, char);
 
     e = edges;
     off = sprintf(ret, "%d-%d", e->src, e->tgt);
@@ -671,7 +672,7 @@ static char *new_game_desc(const game_params *params, random_state *rs,
         e = edges + i;
         off += sprintf(ret + off, ",%d-%d", e->src, e->tgt);
     }
-    sfree(edges);
+    sfree(edges);*/
     }
 
     /*sfree(pts_base);*/
@@ -681,7 +682,7 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     while ((e = delpos234(edges_min, 0)) != NULL) sfree(e);
     freetree234(edges_min);
 
-    return ret;
+    return dupstr("FIXME");
 }
 
 static const char *validate_desc(const game_params *params, const char *desc)

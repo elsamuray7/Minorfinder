@@ -1,0 +1,18 @@
+# Bachelor Thesis of Samuel Holderbach
+
+# What this is about
+A simple graph puzzle called <i>Minorensucher</i> or <i>minorfinder</i>.
+The game begins by showing the player a bigger graph (the original graph) and a smaller one (the minor). To solve the puzzle the player has to contract eges untill the original graph is isomorphic to the minor.
+
+## Build the game
+# Generate Unix Makefile
+- Install any gtk version (2 or 3)
+- Run the perl script `mkfiles.pl`
+- Run the batch scipt `mkauto.sh`
+- Run `./configure`
+# Actual build
+- Finally run `make`
+
+## Run the game
+- Run the perl script `dektop.pl` and specify an output path for the executable `.desktop` files
+- If required set the checkbox for "execute as a program" in properties->access

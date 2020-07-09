@@ -24,5 +24,5 @@ GAMES += minorfinder
 !end
 
 !begin >gamedesc.txt
-minorfinder:minorfinder.exe:Minorfinder:Minor graphs puzzle:Find a minor graph by contracting edges of its base graph.
+minorfinder:minorfinder.exe:Minorfinder:Contract edges untill you find the minor:Contract edges of the original graph untill you find the minor.
 !end
