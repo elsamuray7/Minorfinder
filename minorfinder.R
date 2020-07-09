@@ -8,5 +8,21 @@
 # it in the Makefile because it will be worse than useless if it
 # ever fails to compile, so it's important that it should actually
 # be built on a regular basis.
-minorfinder : [X] GTK COMMON minorfinder minorfinder-icon|no-icon
-minorfinder : [G] WINDOWS COMMON minorfinder minorfinder.res|noicon.res
+MINORFINDER_EXTRA = tree234
+
+minorfinder : [X] GTK COMMON minorfinder MINORFINDER_EXTRA minorfinder-icon|no-icon
+minorfinder : [G] WINDOWS COMMON minorfinder MINORFINDER_EXTRA minorfinder.res|noicon.res
+
+ALL += minorfinder[COMBINED] MINORFINDER_EXTRA
+
+!begin am gtk
+GAMES += minorfinder
+!end
+
+!begin >list.c
+    A(minorfinder)\
+!end
+
+!begin >gamedesc.txt
+minorfinder:minorfinder.exe:Minorfinder:Minor graphs puzzle:Find a minor graph by contracting edges of its base graph.
+!end
