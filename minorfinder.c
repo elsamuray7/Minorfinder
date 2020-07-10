@@ -38,10 +38,10 @@ enum {
  */
 typedef struct point {
 
-    ulong x;
-    ulong y;
+    long x;
+    long y;
 
-    ulong d; /* denominator */
+    long d; /* denominator */
 
 } point;
 
@@ -50,7 +50,7 @@ typedef struct vertex {
 
     int idx; /* points array index */
 
-    int deg; /* degree */
+    int deg;
 
 } vertex;
 
@@ -139,7 +139,7 @@ static bool game_fetch_preset(int i, char **name, game_params **params)
             return false;
     }
 
-    sprintf(buf, "%d base points- %d minor points", n_base, n_min);
+    sprintf(buf, "%d base - %d minor points", n_base, n_min);
     *name = dupstr(buf);
 
     ret = snew(game_params);
@@ -500,56 +500,62 @@ static char *new_game_desc(const game_params *params, random_state *rs,
 {
     int n_min = params->n_min;
     int n_base = params->n_base;
-    int coord_lim;
-    int coord_mar;
-    ulong* coords_x;
-    ulong* coords_y;
+    int cnt;
+    int i;
+
+    long g_size;
+    long g_margin;
+    long* coords_x;
+    long* coords_y;
+
     point* pt;
     /*point* pts_base;*/
     point* pts_min;
+
     vertex* vx;
     /*vertex* vtcs_base;*/
     vertex* vtcs_min;
     /*tree234* vtcs_base_234;*/
     tree234* vtcs_min_234;
+
     edge* e;
     /*tree234* edges_base;*/
     tree234* edges_min;
     /*char* ret;*/
 
-    int cnt;
-    int i;
-
     /*
-     * Set the coordinate limits and margin for our grids. The grids are
-     * square and thus the coordinate limit will be the same for both axes.
+     * Set the grid size and margin. The grid size depends on the number of
+     * points that our base graph has. It determines the actual size of our
+     * grids. Together with the grid margin we get the exact area in which
+     * we can place our points.
      */
-    coord_lim = COORDLIMIT(n_base);
-    coord_mar = COORDMARGIN(coord_lim);
+    g_size = COORDLIMIT(n_base);
+    g_margin = COORDMARGIN(g_size);
 
     /* Allocate memory for n_min points */
     pts_min = snewn(n_min, point);
     
     /*
-     * Generate random coordinates for the points of the minor graph.
-     * The coorinates will be in the range (coord_mar, coord_lim - coord_mar).
+     * Generate random coordinates for the points of the minor graph. The
+     * coordinates will be in the range (coord_mar, coord_lim - coord_mar).
      */
-    cnt = coord_lim - (coord_mar << 1);
-    coords_x = snewn(cnt, ulong);
-    coords_y = snewn(cnt, ulong);
+    cnt = g_size - (g_margin << 1);
+    coords_x = snewn(cnt, long);
+    coords_y = snewn(cnt, long);
     for (i = 0; i < cnt; i++)
     {
         *(coords_x + i) = i;
         *(coords_y + i) = i;
     }
-    shuffle(coords_x, cnt, sizeof(ulong), rs);
-    shuffle(coords_y, cnt, sizeof(ulong), rs);
+    shuffle(coords_x, cnt, sizeof(*coords_x), rs);
+    shuffle(coords_y, cnt, sizeof(*coords_y), rs);
     for (i = 0; i < n_min; i++)
     {
         pt = pts_min + i;
-        pt->x = *(coords_x + i) + coord_mar;
-        pt->y = *(coords_y + i) + coord_mar;
+        pt->x = *(coords_x + i) + g_margin;
+        pt->y = *(coords_y + i) + g_margin;
         pt->d = 1;
+        printf("idx:%d-x:%d-y:%d\n", i, (int) pt->x, (int) pt->y); /**/
     }
     sfree(coords_x);
     sfree(coords_y);
@@ -560,11 +566,6 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     vtcs_min_234 = newtree234(vertcmp);
     edges_min = newtree234(edgecmp);
 
-    /*
-     * Add edges to the minor graph. Make sure that new edges do not cross
-     * existing ones and that the degree of the vertices does not increase
-     * beyond MAXDEGREE.
-     */
     for (i = 0; i < n_min; i++)
     {
         vx = vtcs_min + i;
@@ -573,33 +574,29 @@ static char *new_game_desc(const game_params *params, random_state *rs,
         add234(vtcs_min_234, vx);
     }
 
-    /* keep adding edges untill there are less than 2 vertices left */
+    /*
+     * Add edges to the minor graph. Make sure that new edges don't cross
+     * existing ones and that the degree of the vertices doesn't increase
+     * beyond MAXDEGREE. Keep adding new edges untill there are less than
+     * two vertices left in the vertex 234-tree.
+     */
     cnt = n_min;
     while (cnt >= 2)
     {
-        /*
-         * Retrieve the vertex with the highest degree from the vertice 234-tree
-         * and try to add new edges that are incident to it. We do not have to
-         * check the vertex's degree here since we delete vertices with a degree
-         * equal to MAXDEGREE after adding new edges that are incident to them.
-         */
         vertex* vxa = delpos234(vtcs_min_234, 0);
         cnt--;
+        printf("finding edges from vertex %d\n", vxa->idx); /**/
 
-        for (i = cnt - 1; i >= 1;)
+        for (i = cnt - 1; i >= 0;)
         {
-            /*
-             * Retrieve the vertex with the lowest degree from the vertice 234-tree
-             * and try to add a new edge that connects it with vxa. Check for
-             * exisitance and crossing before adding a new edge.
-             */
-            vertex* vxb = index234(vtcs_min_234, i);
             int j;
-            bool crosses = false;
-            
-            if (isedge(edges_min, vxa->idx, vxb->idx))
+            bool crossing = false;
+            vertex* vxb = index234(vtcs_min_234, i);
+            printf("finding edges to vertex %d\n", vxb->idx); /**/
+
+            if (isedge(edges_min, vxa->idx, vxb->idx)) 
             {
-                /* the edge exists, decrease index and jump to next iteration */
+                printf("existing edge %d-%d\n", vxa->idx, vxb->idx); /**/
                 i--;
                 continue;
             }
@@ -608,48 +605,59 @@ static char *new_game_desc(const game_params *params, random_state *rs,
             {
                 point pta = *(pts_min + vxa->idx);
                 point ptb = *(pts_min + vxb->idx);
-                point ptes = *(pts_min + e->src);
-                point ptet = *(pts_min + e->tgt);
-                if ((crosses = cross(pta, ptb, ptes, ptet))) break; /* the edge crosses an existing edge */
+                point esrc = *(pts_min + e->src);
+                point etgt = *(pts_min + e->tgt);
+                if (vxa->idx == e->src || vxa->idx == e->tgt ||
+                    vxb->idx == e->src || vxb->idx == e->tgt)
+                {
+                    continue;
+                }
+                else if (cross(pta, ptb, esrc, etgt))
+                {
+                    printf("crossing found between edge %d-%d and edge %d-%d\n",
+                            vxa->idx, vxb->idx, e->src, e->tgt); /**/
+                    crossing = true;
+                    break;
+                }
             }
 
-            if (!crosses)
+            if (crossing)
             {
-                /* the edge does not cross an existing edge, add it and update vertices */
-                addedge(edges_min, vxa->idx, vxb->idx);
-                delpos234(vtcs_min_234, i);
-                if (++(vxa->deg) >= MAXDEGREE) break;
-                if(++(vxb->deg) < MAXDEGREE)
-                {
-                    /* the vertex degree is still smaller than MAXDEGREE, update the vertex */
-                    add234(vtcs_min_234, vxb);
-                    /*
-                     * In this case we do not decrease the index because the vertex's new
-                     * position in the 234-tree is definitely smaller than or at least equal
-                     * to the current index. Hence it is possible that one of the vertices
-                     * in our 234-tree has been shifted to the position that our current index
-                     * points to. If we decrease the index we would ignore that vertex.
-                     */
-                }
-                else
-                {
-                    /* the vertex degree has reached MAXDEGREE, decrease count and index */
-                    cnt--;
-                    i++;
-                }
+                i--;
+                continue;
             }
             else
             {
-                i++;
+                printf("add edge from vertex %d to vertex %d\n", vxa->idx, vxb->idx); /**/
+                addedge(edges_min, vxa->idx, vxb->idx);
+                del234(vtcs_min_234, vxb);
+                vxb->deg++;
+                if (vxb->deg < MAXDEGREE)
+                {
+                    printf("update vertex %d\n", vxb->idx); /**/
+                    add234(vtcs_min_234, vxb);
+                }
+                else
+                {
+                    printf("delete vertex %d\n", vxb->idx); /**/
+                    cnt--;
+                    i--;
+                }
+                vxa->deg++;
+                if (vxa->deg >= MAXDEGREE)
+                {
+                    break;
+                }
             }
         }
+
+        printf("finished vertex %d\n", vxa->idx); /**/
     }
     sfree(vtcs_min);
-    while ((vx = delpos234(vtcs_min_234, 0)) != NULL) sfree(vx);
     freetree234(vtcs_min_234);
 
     /*ret = NULL;*/
-    /*cnt = count234(edges_min);*/
+    cnt = count234(edges_min);
     {
     /*int retlen = 0;*/
     /*char buf[80];*/
@@ -660,7 +668,7 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     {
         *(edges + i) = *e;
         e = edges + i;
-        printf("%d-%d", e->src, e->tgt);
+        printf("%d-%d\n", e->src, e->tgt);
         /*retlen += (sprintf(buf, "%d-%d", e->src, e->tgt) + 1);*/
     }
     /*ret = snewn(retlen, char);
@@ -671,8 +679,8 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     {
         e = edges + i;
         off += sprintf(ret + off, ",%d-%d", e->src, e->tgt);
-    }
-    sfree(edges);*/
+    }*/
+    sfree(edges);
     }
 
     /*sfree(pts_base);*/
