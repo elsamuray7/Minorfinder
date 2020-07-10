@@ -32,6 +32,8 @@ enum {
     NCOLOURS
 };
 
+#define PREFERRED_TILESIZE 64
+
 /*
  * A point in a grid, spefified by its coordinates and its
  * respective denominator.
@@ -456,9 +458,9 @@ static int vertcmpC(const void *av, const void *bv)
     const vertex *a = (vertex *)av;
     const vertex *b = (vertex *)bv;
 
-    if (a->deg < b->deg)
+    if (a->deg > b->deg)
 	return -1;
-    else if (a->deg > b->deg)
+    else if (a->deg < b->deg)
 	return +1;
     else if (a->idx < b->idx)
 	return -1;
@@ -493,7 +495,8 @@ static int vertcmp(void *av, void *bv)
  * 
  */
 
-#define COORDMARGIN(l) ((l) / 10);
+#define square(x) ((x) * (x))
+#define COORDMARGIN(s) ((s) / 10)
 
 static char *new_game_desc(const game_params *params, random_state *rs,
 			   char **aux, bool interactive)
@@ -502,11 +505,13 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     int n_base = params->n_base;
     int cnt;
     int i;
+    int j;
 
     long g_size;
     long g_margin;
     long* coords_x;
     long* coords_y;
+    long* dists_min;
 
     point* pt;
     /*point* pts_base;*/
@@ -529,7 +534,7 @@ static char *new_game_desc(const game_params *params, random_state *rs,
      * grids. Together with the grid margin we get the exact area in which
      * we can place our points.
      */
-    g_size = COORDLIMIT(n_base);
+    g_size = COORDLIMIT(n_base) * PREFERRED_TILESIZE;
     g_margin = COORDMARGIN(g_size);
 
     /* Allocate memory for n_min points */
@@ -544,16 +549,16 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     coords_y = snewn(cnt, long);
     for (i = 0; i < cnt; i++)
     {
-        *(coords_x + i) = i;
-        *(coords_y + i) = i;
+        coords_x[i] = i;
+        coords_y[i] = i;
     }
     shuffle(coords_x, cnt, sizeof(*coords_x), rs);
     shuffle(coords_y, cnt, sizeof(*coords_y), rs);
     for (i = 0; i < n_min; i++)
     {
         pt = pts_min + i;
-        pt->x = *(coords_x + i) + g_margin;
-        pt->y = *(coords_y + i) + g_margin;
+        pt->x = coords_x[i] + g_margin;
+        pt->y = coords_y[i] + g_margin;
         pt->d = 1;
         printf("idx:%d-x:%d-y:%d\n", i, (int) pt->x, (int) pt->y); /**/
     }
@@ -589,7 +594,6 @@ static char *new_game_desc(const game_params *params, random_state *rs,
 
         for (i = cnt - 1; i >= 0;)
         {
-            int j;
             bool crossing = false;
             vertex* vxb = index234(vtcs_min_234, i);
             printf("finding edges to vertex %d\n", vxb->idx); /**/
@@ -603,10 +607,10 @@ static char *new_game_desc(const game_params *params, random_state *rs,
 
             for (j = 0; (e = index234(edges_min, j)) != NULL; j++)
             {
-                point pta = *(pts_min + vxa->idx);
-                point ptb = *(pts_min + vxb->idx);
-                point esrc = *(pts_min + e->src);
-                point etgt = *(pts_min + e->tgt);
+                point pta = pts_min[vxa->idx];
+                point ptb = pts_min[vxb->idx];
+                point esrc = pts_min[e->src];
+                point etgt = pts_min[e->tgt];
                 if (vxa->idx == e->src || vxa->idx == e->tgt ||
                     vxb->idx == e->src || vxb->idx == e->tgt)
                 {
@@ -656,6 +660,30 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     sfree(vtcs_min);
     freetree234(vtcs_min_234);
 
+    /*
+     * For every point in the minor graph find the distane to the nearest
+     * point.
+     */
+    dists_min = snewn(n_min, long);
+    for (i = 0; i < n_min; i++)
+    {
+        point* pta = pts_min + i;
+        for (j = 0; j < n_min; j++)
+        {
+            if (i == j) continue;
+            point* ptb = pts_min + j;
+            long dx2 = square(pta->x - ptb->x);
+            long dy2 = square(pta->y - ptb->y);
+            long dist = squarert(dx2 + dy2);
+            if (dist < dists_min[i])
+            {
+                dists_min[i] = dist;
+                printf("new min dist from point %d to point %d is %d\n",
+                        i, j, (int) dists_min[i]);
+            }
+        }
+    }
+
     /*ret = NULL;*/
     cnt = count234(edges_min);
     {
@@ -685,6 +713,7 @@ static char *new_game_desc(const game_params *params, random_state *rs,
 
     /*sfree(pts_base);*/
     sfree(pts_min);
+    sfree(dists_min);
     /*while ((e = delpos234(edges_base, 0)) != NULL) sfree(e);*/
     /*freetree234(edges_base);*/
     while ((e = delpos234(edges_min, 0)) != NULL) sfree(e);
@@ -785,7 +814,9 @@ static game_state *execute_move(const game_state *state, const char *move)
 static void game_compute_size(const game_params *params, int tilesize,
                               int *x, int *y)
 {
-    *x = *y = 10 * tilesize;	       /* FIXME */
+    int g_size = COORDLIMIT(params->n_base) * tilesize;;
+    *x = g_size << 1;
+    *y = g_size;
 }
 
 static void game_set_size(drawing *dr, game_drawstate *ds,
@@ -808,7 +839,7 @@ static game_drawstate *game_new_drawstate(drawing *dr, const game_state *state)
 {
     struct game_drawstate *ds = snew(struct game_drawstate);
 
-    ds->tilesize = 0;
+    ds->tilesize = PREFERRED_TILESIZE;
     ds->FIXME = 0;
 
     return ds;
@@ -893,7 +924,7 @@ const struct game thegame = {
     game_changed_state,
     interpret_move,
     execute_move,
-    20 /* FIXME */, game_compute_size, game_set_size,
+    PREFERRED_TILESIZE, game_compute_size, game_set_size,
     game_colours,
     game_new_drawstate,
     game_free_drawstate,

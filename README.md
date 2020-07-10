@@ -14,5 +14,4 @@ The game begins by showing the player a bigger graph (the original graph) and a 
 - Finally run `make`
 
 ## Run the game
-- Run the perl script `dektop.pl` and specify an output path for the executable `.desktop` files
-- If required set the checkbox for "execute as a program" in properties->access
+- Run `./minorfinder`
