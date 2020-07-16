@@ -27,12 +27,12 @@
 /* type alias for an unsigned long */
 #define ulong unsigned long
 
+#define PREFERRED_TILESIZE 64
+
 enum {
     COL_BACKGROUND,
     NCOLOURS
 };
-
-#define PREFERRED_TILESIZE 64
 
 /*
  * A point in a grid, spefified by its coordinates and its
@@ -40,8 +40,7 @@ enum {
  */
 typedef struct point {
 
-    long x;
-    long y;
+    long x, y;
 
     long d; /* denominator */
 
@@ -495,7 +494,83 @@ static int vertcmp(void *av, void *bv)
  * 
  */
 
-#define COORDMARGIN(s) ((s) / 20)
+static void _addedge(tree234* edges, tree234* vertices, point* points, long* cnt)
+{
+    int i;
+    vertex* vxa = delpos234(vertices, 0);
+    (*cnt)--;
+    /**/printf("Creating edges from vertex %d\n", vxa->idx);/**/
+
+    for (i = (*cnt) - 1; i >= 0;)
+    {
+        bool crossing = false;
+        int j;
+        vertex* vxb = index234(vertices, i);
+        edge* e;
+        /**/printf("Creating edges to vertex %d\n", vxb->idx);/**/
+
+        if (isedge(edges, vxa->idx, vxb->idx)) 
+        {
+            /**/printf("Found existing edge from vertex %d to vertex %d\n",
+                        vxa->idx, vxb->idx);/**/
+            i--;
+            continue;
+        }
+
+        for (j = 0; (e = index234(edges, j)) != NULL; j++)
+        {
+            if (vxa->idx == e->src || vxa->idx == e->tgt ||
+                vxb->idx == e->src || vxb->idx == e->tgt)
+            {
+                continue;
+            }
+            else if (cross(points[vxa->idx], points[vxb->idx],
+                            points[e->src], points[e->tgt]))
+            {
+                /**/printf("Found crossing between edges %d-%d and %d-%d\n",
+                            vxa->idx, vxb->idx, e->src, e->tgt);/**/
+                crossing = true;
+                break;
+            }
+        }
+
+        if (crossing)
+        {
+            i--;
+            continue;
+        }
+        else
+        {
+            /**/printf("Add edge from vertex %d to vertex %d to the edges 234-tree\n",
+                        vxa->idx, vxb->idx);/**/
+            addedge(edges, vxa->idx, vxb->idx);
+            del234(vertices, vxb);
+            vxb->deg++;
+            if (vxb->deg < MAXDEGREE)
+            {
+                /**/printf("Update vertex %d in the vertices 234-tree\n",
+                            vxb->idx);/**/
+                add234(vertices, vxb);
+            }
+            else
+            {
+                /**/printf("Delete vertex %d in the vertices 234-tree\n",
+                            vxb->idx);/**/
+                (*cnt)--;
+                i--;
+            }
+            vxa->deg++;
+            if (vxa->deg >= MAXDEGREE) break;
+        }
+    }
+
+    /**/printf("Finished creating edges from vertex %d\n", vxa->idx);/**/
+}
+
+/* denominator must divide PREFFERED_TILESIZE, i.e. 64 */
+#define COORDMARGIN(l) ((l) / 16)
+/* must divide the denominator of COORDMARGIN, i.e. 16 and must be a multiple of 2 */
+#define COORDUNIT 8
 #define square(x) ((x) * (x))
 
 static char *new_game_desc(const game_params *params, random_state *rs,
@@ -505,33 +580,32 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     
     const int n_min = params->n_min;
     const int n_base = params->n_base;
-    int n_rand = n_base / 6;
-    const int n_sub = (n_base - n_rand) / n_min;
-    int cnt;
-    int i;
-    int j;
+    const int n_sub = ((5 * n_base) / 6) / n_min;
+    int* sub_sizes;
 
+    long i, j;
+    long tmp, tmp2;
     long g_size;
     long g_margin;
     long* coords_x;
     long* coords_y;
-    long* dists_min;
+    long* radii;
+    long* sub_offsets;
 
     point* pt;
     point* pts_min;
+    point* pts_base;
     point* sub;
     point** subs;
-    /*point* pts_base;*/
 
     vertex* vx;
     vertex* vtcs_min;
-    tree234* vtcs_min_234;
-    /*vertex* vtcs_base;*/
-    /*tree234* vtcs_base_234;*/
+    vertex* vtcs_base;
+    tree234* vtcs_234;
 
     edge* e;
     tree234* edges_min;
-    /*tree234* edges_base;*/
+    tree234* edges_base;
 
     /*
      * Set the grid size and margin. The grid size depends on the number of
@@ -543,198 +617,145 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     g_margin = COORDMARGIN(g_size);
     /**/printf("Set grid size: %d and margin: %d\n", (int) g_size, (int) g_margin);/**/
 
-    /* Allocate memory for n_min points */
-    pts_min = snewn(n_min, point);
-    
     /*
-     * Generate random coordinates for the points of the minor graph. The
-     * coordinates will be in the range (coord_mar, coord_lim - coord_mar).
+     * Generate random coordinates for the points of the minor and the base graph.
+     * The coordinates will be in the range (coord_mar, coord_lim - coord_mar).
      */
-    cnt = g_size - (g_margin << 1) + 1;
-    coords_x = snewn(cnt, long);
-    coords_y = snewn(cnt, long);
-    for (i = 0; i < cnt; i++)
+    tmp = g_size - (2 * g_margin); /* coordinate range */
+    tmp2 = (tmp / COORDUNIT) + 1; /* number of possible coordinates */
+    coords_x = snewn(tmp2, long);
+    coords_y = snewn(tmp2, long);
+    for (i = 0; i <= tmp; i += COORDUNIT)
     {
-        coords_x[i] = i;
-        coords_y[i] = i;
+        int idx = i / COORDUNIT;
+        coords_x[idx] = i + g_margin;
+        coords_y[idx] = i + g_margin;
     }
-    shuffle(coords_x, cnt, sizeof(*coords_x), rs);
-    shuffle(coords_y, cnt, sizeof(*coords_y), rs);
+    shuffle(coords_x, tmp2, sizeof(*coords_x), rs);
+    shuffle(coords_y, tmp2, sizeof(*coords_y), rs);
+
+    /* Allocate memory for the points of the minor */
+    pts_min = snewn(n_min, point);
+
+    /* Assign random coordinates to the points of the minor */
     for (i = 0; i < n_min; i++)
     {
         pt = pts_min + i;
-        pt->x = coords_x[i] + g_margin;
-        pt->y = coords_y[i] + g_margin;
+        pt->x = coords_x[i];
+        pt->y = coords_y[i];
         pt->d = 1;
-        /**/printf("Created minor point %d with coordinates x: %d, y: %d\n",
-                    i, (int) pt->x, (int) pt->y);/**/
+        /**/printf("Assigned minor point %d with coordinates x: %d, y: %d\n",
+                    (int) i, (int) pt->x, (int) pt->y);/**/
     }
-    sfree(coords_x);
-    sfree(coords_y);
-    
-    /* allocate memory for n_min vertices */
-    vtcs_min = snewn(n_min, vertex);
-    /* create new 234-trees which store vertices and edges */
-    vtcs_min_234 = newtree234(vertcmp);
-    edges_min = newtree234(edgecmp);
 
+    /* Create the 234-tree that stores the edges of the minor */
+    edges_min = newtree234(edgecmp);
+    
+    /*
+     * Add edges to the minor. Make sure that new edges don't cross existing ones
+     * and that the degree of the vertices doesn't increase beyond MAXDEGREE. Keep
+     * adding new edges untill there are less than two vertices left in the vertex
+     * 234-tree.
+     */
+    vtcs_min = snewn(n_min, vertex);
+    vtcs_234 = newtree234(vertcmp);
     for (i = 0; i < n_min; i++)
     {
         vx = vtcs_min + i;
         vx->idx = i;
         vx->deg = 0;
-        add234(vtcs_min_234, vx);
+        add234(vtcs_234, vx);
     }
-
-    /*
-     * Add edges to the minor graph. Make sure that new edges don't cross
-     * existing ones and that the degree of the vertices doesn't increase
-     * beyond MAXDEGREE. Keep adding new edges untill there are less than
-     * two vertices left in the vertex 234-tree.
-     */
-    cnt = n_min;
-    while (cnt >= 2)
+    tmp = n_min; /* number of minor vertices */
+    while (tmp >= 2)
     {
-        vertex* vxa = delpos234(vtcs_min_234, 0);
-        cnt--;
-        /**/printf("Creating minor edges from vertex %d\n", vxa->idx);/**/
-
-        for (i = cnt - 1; i >= 0;)
-        {
-            bool crossing = false;
-            vertex* vxb = index234(vtcs_min_234, i);
-            /**/printf("Creating minor edges to vertex %d\n", vxb->idx);/**/
-
-            if (isedge(edges_min, vxa->idx, vxb->idx)) 
-            {
-                /**/printf("Found existing minor edge from vertex %d to vertex %d\n",
-                            vxa->idx, vxb->idx);/**/
-                i--;
-                continue;
-            }
-
-            for (j = 0; (e = index234(edges_min, j)) != NULL; j++)
-            {
-                if (vxa->idx == e->src || vxa->idx == e->tgt ||
-                    vxb->idx == e->src || vxb->idx == e->tgt)
-                {
-                    continue;
-                }
-                else if (cross(pts_min[vxa->idx], pts_min[vxb->idx],
-                                pts_min[e->src], pts_min[e->tgt]))
-                {
-                    /**/printf("Found crossing between minor edges %d-%d and %d-%d\n",
-                                vxa->idx, vxb->idx, e->src, e->tgt);/**/
-                    crossing = true;
-                    break;
-                }
-            }
-
-            if (crossing)
-            {
-                i--;
-                continue;
-            }
-            else
-            {
-                /**/printf("Add edge from vertex %d to vertex %d to the minor edges 234-tree\n",
-                            vxa->idx, vxb->idx);/**/
-                addedge(edges_min, vxa->idx, vxb->idx);
-                del234(vtcs_min_234, vxb);
-                vxb->deg++;
-                if (vxb->deg < MAXDEGREE)
-                {
-                    /**/printf("Update vertex %d in the minor vertices 234-tree\n",
-                                vxb->idx);/**/
-                    add234(vtcs_min_234, vxb);
-                }
-                else
-                {
-                    /**/printf("Delete vertex %d in the minor vertices 234-tree\n",
-                                vxb->idx);/**/
-                    cnt--;
-                    i--;
-                }
-                vxa->deg++;
-                if (vxa->deg >= MAXDEGREE) break;
-            }
-        }
-
-        /**/printf("Finished creating minor edges from vertex %d\n", vxa->idx);/**/
+        _addedge(edges_min, vtcs_234, pts_min, &tmp);
     }
     sfree(vtcs_min);
-    freetree234(vtcs_min_234);
+    freetree234(vtcs_234);
 
     /*
-     * To get an orginal graph out of a minor we need to replace all points
-     * of the minor by subgraphs. To determine the areas in which we can
-     * place the subgraphs we need to find for every point the distance to
-     * its nearest neighbour. The distances are used as radii for circles
-     * around the points of our minor. When we have our circles we also have
-     * our subgraph areas.
+     * To get the orginal graph out of the minor we need to replace all points
+     * of the minor by subgraphs. To determine the areas in which we can place
+     * the subgraphs we need to find for every point of the minor the distance
+     * to its nearest neighbour. The distances are used to calculate the radii
+     * of circular subgraph areas around the points of our minor.
      */
-    dists_min = snewn(n_min, long);
+    tmp = g_size - (2 * g_margin); /* maximal radius */
+    radii = snewn(n_min, long);
     for (i = 0; i < n_min; i++)
     {
-        dists_min[i] = g_size - g_margin;
+        radii[i] = tmp;
     }
-
     for (i = 0; i < n_min - 1; i++)
     {
         point* pta = pts_min + i;
         for (j = i + 1; j < n_min; j++)
         {
             point* ptb = pts_min + j;
-            long dist = squarert(square(pta->x - ptb->x) + square(pta->y - ptb->y));
-            if (dist < dists_min[i])
+            long dist = squarert(square(pta->x - ptb->x) + square(pta->y - ptb->y)) / 2;
+            if (dist < radii[i])
             {
-                dists_min[i] = dist;
-                printf("Assigned new minimal distance %d from minor point %d to %d\n",
-                        (int) dists_min[i], i, j); /**/
+                radii[i] = dist;
+                /**/printf("Assigned new minimal distance %d from minor point %d to %d\n",
+                        (int) radii[i], (int) i, (int) j);/**/
             }
-            if (dist < dists_min[j])
+            if (dist < radii[j])
             {
-                dists_min[j] = dist;
-                printf("Assigned new minimal distance %d from minor point %d to %d\n",
-                        (int) dists_min[j], j, i); /**/
+                radii[j] = dist;
+                /**/printf("Assigned new minimal distance %d from minor point %d to %d\n",
+                        (int) radii[j], (int) j, (int) i);/**/
             }
         }
     }
 
+    /* Allocare memory for the subgraphs that replace the points of the minor */
     subs = snewn(n_min, point*);
+
+    /*
+     * Generate random coordinates for the points of our subgraphs. The points
+     * of a subgraph must lay in the previously calculated circle with a minor
+     * point as center and the distance to the neirest neighbour of the center
+     * as radius.
+     */
+    tmp = 4 * n_sub; /* number of possible angles */
+    tmp2 = 4 * COORDUNIT; /* minimal radius */
+    sub_sizes = snewn(n_min, int);
     for (i = 0; i < n_min; i++)
     {
-        long c_margin = COORDMARGIN(dists_min[i]);
-        double angles[n_sub];
-        /**/printf("Creating subgraph that replaces minor point %d\n", i);/**/
-        if (dists_min[i] < (c_margin << 1))
+        double angles[tmp];
+        /**/printf("Creating subgraph that replaces minor point %d\n", (int) i);/**/
+        if (radii[i] < tmp2 ||
+            (pts_min[i].x - g_margin) < tmp2 || (g_size - g_margin - pts_min[i].x) < tmp2 ||
+            (pts_min[i].y - g_margin) < tmp2 || (g_size - g_margin - pts_min[i].y) < tmp2)
         {
             subs[i] = snew(point);
+            sub_sizes[i] = 1;
             sub = subs[i];
             *sub = pts_min[i];
-            n_rand += (n_sub - 1);
             /**/printf("Copied minor point into subgraph and finished creating subgraph %d\n",
-                        i);/**/
+                        (int) i);/**/
             continue;
         }
         subs[i] = snewn(n_sub, point);
+        sub_sizes[i] = n_sub;
         sub = subs[i];
-        for (j = 0; j < n_sub; j++)
+        for (j = 0; j < tmp; j++)
         {
-            angles[j] = (double) random_upto(rs, 101) * (2.0 * PI) / 100.0;
+            angles[j] = (double) j * (2.0 * PI) / (double) tmp;
         }
-        shuffle(angles, n_sub, sizeof(double), rs);
+        shuffle(angles, tmp, sizeof(double), rs);
         for (j = 0; j < n_sub; j++)
         {
-            long x, y, r;
+            long x, y;
             do
             {
-                r = random_upto(rs, (dists_min[i] - (c_margin << 1)) + 1) + c_margin;
+                long r = random_upto(rs, (radii[i] - ((3 * COORDUNIT) / 2)) + 1) + COORDUNIT;
                 x = pts_min[i].x + (r * sin(angles[j]));
                 y = pts_min[i].y + (r * cos(angles[j]));
             }
-            while (x < g_margin || y < g_margin ||
-                    x > (g_size - g_margin) || y > (g_size - g_margin));
+            while (x < g_margin || x > (g_size - g_margin) ||
+                    y < g_margin || y > (g_size - g_margin));
             pt = sub + j;
             pt->x = x;
             pt->y = y;
@@ -742,9 +763,120 @@ static char *new_game_desc(const game_params *params, random_state *rs,
             /**/printf("Created new subgraph point with coordinates x: %d, y: %d\n",
                     (int) pt->x, (int) pt->y);/**/
         }
-        /**/printf("Finished creating subgraph %d\n", i);/**/
+        /**/printf("Finished creating subgraph %d\n", (int) i);/**/
     }
-    sfree(dists_min);
+    sfree(radii);
+
+    /* Create the 234-tree that stores the edges of the base graph */
+    edges_base = newtree234(edgecmp);
+
+    vtcs_base = snewn(n_base, vertex);
+
+    /*
+     * Add edges to the subgraphs of our base graph. Make sure that edges don't
+     * cross and the degree of the vertices does not increase beyond MAXDEGREE.
+     */
+    sub_offsets = snewn(n_min + 1, long);
+    *sub_offsets = 0;
+    for (i = 0; i < n_min; i++)
+    {
+        vtcs_234 = newtree234(vertcmp);
+        for (j = sub_offsets[i]; j < sub_offsets[i] + sub_sizes[i]; j++)
+        {
+            vx = vtcs_base + j;
+            vx->idx = j;
+            vx->deg = 0;
+            add234(vtcs_234, vx);
+        }
+        sub_offsets[i+1] = sub_offsets[i] + sub_sizes[i];
+        tmp = sub_sizes[i]; /* number of subgraph vertices */
+        while (tmp >= 2)
+        {
+            _addedge(edges_base, vtcs_234, subs[i], &tmp);
+        }
+        freetree234(vtcs_234);
+    }
+
+    /* Allocate memory for the base graph points */
+    pts_base = snewn(n_base, point);
+
+    /* Copy all subgraph points into the array of base points */
+    for (i = 0; i < n_min; i++)
+    {
+        sub = subs[i];
+        for (j = 0; j < sub_sizes[i]; j++)
+        {
+            pts_base[sub_offsets[i]+j] = sub[j];
+            /**/printf("Copied subgraph point %d of subgraph %d into base graph points at %d\n",
+                        (int) j, (int) i, (int) (sub_offsets[i] + j));/**/
+        }
+    }
+
+    /*
+     * TODO:
+     * Currently the remaining points and the subgraph points can overlap.
+     * To avoid this we would have to check the remaining points for their
+     * distance to any of the subgraph points. This might be complicated
+     * and expensive, hence I want to see whether it's really neccessary
+     * first.
+     */
+
+    /* Assign random coordinates to the remaining points */
+    for (i = sub_offsets[n_min]; i < n_base; i++)
+    {
+       pt = pts_base + i;
+       pt->x = coords_x[i + n_min - sub_offsets[n_min]];
+       pt->y = coords_y[i + n_min - sub_offsets[n_min]];
+       pt->d = 1;
+       /**/printf("Assigned remaining point %d with coordinates x: %d, y: %d\n",
+                    (int) i, (int) pt->x, (int) pt->y);/**/
+    }
+    sfree(coords_x);
+    sfree(coords_y);
+
+    /*
+     * Add edges between the subgraphs in such a way that if the subgraphs would
+     * be replaced by the minor points again the outcome would be our minor graph.
+     */
+    for (i = 0; (e = index234(edges_min, i)) != NULL; i++)
+    {
+        long idxa = random_upto(rs, sub_sizes[e->src]) + sub_offsets[e->src];
+        long idxb = random_upto(rs, sub_sizes[e->tgt]) + sub_offsets[e->tgt];
+        addedge(edges_base, idxa, idxb);
+        /**/printf("Added edge point %d (vertex %d), subgraph %d to p:%d (v:%d), s:%d to base graph edges\n",
+                    (int) (idxa - sub_offsets[e->src]), (int) idxa, e->src,
+                    (int) (idxb - sub_offsets[e->tgt]), (int) idxb, e->tgt);/**/
+        vtcs_base[idxa].deg++;
+        vtcs_base[idxb].deg++;
+    }
+    sfree(sub_sizes);
+    sfree(sub_offsets);
+
+    /*
+     * Add edges to the base graph including the remaining points. Make sure that
+     * edges don't cross and the degree of the vertices does not increase beyond
+     * MAXDEGREE.
+     */
+    vtcs_234 = newtree234(vertcmp);
+    for (i = 0; i < sub_offsets[n_min]; i++)
+    {
+        vx = vtcs_base + i;
+        add234(vtcs_234, vx);
+    }
+    for (i = sub_offsets[n_min]; i < n_base; i++)
+    {
+        vx = vtcs_base + i;
+        vx->idx = i;
+        vx->deg = 0;
+        add234(vtcs_234, vx);
+    }
+    tmp = n_base;
+    while (tmp >= 2)
+    {
+        _addedge(edges_base, vtcs_234, pts_base, &tmp);
+    }
+    sfree(vtcs_base);
+    freetree234(vtcs_234);
 
     /*ret = NULL;
     cnt = count234(edges_min);
@@ -772,13 +904,13 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     }*/
 
     sfree(pts_min);
+    sfree(pts_base);
     for (i = 0; i < n_min; i++) sfree(subs[i]);
     sfree(subs);
-    /*sfree(pts_base);*/
     while ((e = delpos234(edges_min, 0)) != NULL) sfree(e);
     freetree234(edges_min);
-    /*while ((e = delpos234(edges_base, 0)) != NULL) sfree(e);*/
-    /*freetree234(edges_base);*/
+    while ((e = delpos234(edges_base, 0)) != NULL) sfree(e);
+    freetree234(edges_base);
 
     return dupstr("FIXME");
 }
@@ -875,8 +1007,8 @@ static game_state *execute_move(const game_state *state, const char *move)
 static void game_compute_size(const game_params *params, int tilesize,
                               int *x, int *y)
 {
-    int g_size = COORDLIMIT(params->n_base) * tilesize;;
-    *x = g_size << 1;
+    int g_size = COORDLIMIT(params->n_base) * tilesize;
+    *x = 2 * g_size;
     *y = g_size;
 }
 
