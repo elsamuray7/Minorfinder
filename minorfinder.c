@@ -403,7 +403,7 @@ static ulong squarert(ulong n) {
  * Our solutions are arranged on a square grid big enough that n
  * points occupy about 1/POINTDENSITY of the grid.
  */
-#define POINTDENSITY 3
+#define POINTDENSITY 5
 #define MAXDEGREE 4
 #define COORDLIMIT(n) squarert((n) * POINTDENSITY)
 
@@ -494,7 +494,7 @@ static int vertcmp(void *av, void *bv)
  * 
  */
 
-static void _addedge(tree234* edges, tree234* vertices, point* points, long* cnt)
+static void addedges(tree234* edges, tree234* vertices, point* points, long* cnt)
 {
     int i;
     vertex* vxa = delpos234(vertices, 0);
@@ -584,7 +584,9 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     int* sub_sizes;
 
     long i, j;
-    long tmp, tmp2;
+    long size;
+    long margin;
+    long count;
     long g_size;
     long g_margin;
     long* coords_x;
@@ -618,21 +620,22 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     /**/printf("Set grid size: %d and margin: %d\n", (int) g_size, (int) g_margin);/**/
 
     /*
-     * Generate random coordinates for the points of the minor and the base graph.
-     * The coordinates will be in the range (coord_mar, coord_lim - coord_mar).
+     * Generate random coordinates for the points of the minor. The coordinates will
+     * be in the range (g_margin + margin, g_size - g_margin - margin).
      */
-    tmp = g_size - (2 * g_margin); /* coordinate range */
-    tmp2 = (tmp / COORDUNIT) + 1; /* number of possible coordinates */
-    coords_x = snewn(tmp2, long);
-    coords_y = snewn(tmp2, long);
-    for (i = 0; i <= tmp; i += COORDUNIT)
+    margin = 4 * COORDUNIT;
+    size = g_size - (2 * (g_margin + margin));
+    count = (size / COORDUNIT) + 1;
+    coords_x = snewn(count, long);
+    coords_y = snewn(count, long);
+    for (i = 0; i <= size; i += COORDUNIT)
     {
         int idx = i / COORDUNIT;
-        coords_x[idx] = i + g_margin;
-        coords_y[idx] = i + g_margin;
+        coords_x[idx] = i + g_margin + margin;
+        coords_y[idx] = i + g_margin + margin;
     }
-    shuffle(coords_x, tmp2, sizeof(*coords_x), rs);
-    shuffle(coords_y, tmp2, sizeof(*coords_y), rs);
+    shuffle(coords_x, count, sizeof(*coords_x), rs);
+    shuffle(coords_y, count, sizeof(*coords_y), rs);
 
     /* Allocate memory for the points of the minor */
     pts_min = snewn(n_min, point);
@@ -647,6 +650,8 @@ static char *new_game_desc(const game_params *params, random_state *rs,
         /**/printf("Assigned minor point %d with coordinates x: %d, y: %d\n",
                     (int) i, (int) pt->x, (int) pt->y);/**/
     }
+    sfree(coords_x);
+    sfree(coords_y);
 
     /* Create the 234-tree that stores the edges of the minor */
     edges_min = newtree234(edgecmp);
@@ -666,10 +671,10 @@ static char *new_game_desc(const game_params *params, random_state *rs,
         vx->deg = 0;
         add234(vtcs_234, vx);
     }
-    tmp = n_min; /* number of minor vertices */
-    while (tmp >= 2)
+    count = n_min; /* number of minor vertices */
+    while (count >= 2)
     {
-        _addedge(edges_min, vtcs_234, pts_min, &tmp);
+        addedges(edges_min, vtcs_234, pts_min, &count);
     }
     sfree(vtcs_min);
     freetree234(vtcs_234);
@@ -681,11 +686,11 @@ static char *new_game_desc(const game_params *params, random_state *rs,
      * to its nearest neighbour. The distances are used to calculate the radii
      * of circular subgraph areas around the points of our minor.
      */
-    tmp = g_size - (2 * g_margin); /* maximal radius */
+    size = g_size - (2 * g_margin);
     radii = snewn(n_min, long);
     for (i = 0; i < n_min; i++)
     {
-        radii[i] = tmp;
+        radii[i] = size;
     }
     for (i = 0; i < n_min - 1; i++)
     {
@@ -718,50 +723,43 @@ static char *new_game_desc(const game_params *params, random_state *rs,
      * point as center and the distance to the neirest neighbour of the center
      * as radius.
      */
-    tmp = 4 * n_sub; /* number of possible angles */
-    tmp2 = 4 * COORDUNIT; /* minimal radius */
+    count = 4 * n_sub;
+    margin = 4 * COORDUNIT;
     sub_sizes = snewn(n_min, int);
     for (i = 0; i < n_min; i++)
     {
-        double angles[tmp];
         /**/printf("Creating subgraph that replaces minor point %d\n", (int) i);/**/
-        if (radii[i] < tmp2 ||
-            (pts_min[i].x - g_margin) < tmp2 || (g_size - g_margin - pts_min[i].x) < tmp2 ||
-            (pts_min[i].y - g_margin) < tmp2 || (g_size - g_margin - pts_min[i].y) < tmp2)
+        if (radii[i] < margin)
         {
             subs[i] = snew(point);
             sub_sizes[i] = 1;
             sub = subs[i];
             *sub = pts_min[i];
-            /**/printf("Copied minor point into subgraph and finished creating subgraph %d\n",
+            /**/printf("Copied minor point into subgraph %d\n",
                         (int) i);/**/
-            continue;
         }
-        subs[i] = snewn(n_sub, point);
-        sub_sizes[i] = n_sub;
-        sub = subs[i];
-        for (j = 0; j < tmp; j++)
+        else
         {
-            angles[j] = (double) j * (2.0 * PI) / (double) tmp;
-        }
-        shuffle(angles, tmp, sizeof(double), rs);
-        for (j = 0; j < n_sub; j++)
-        {
-            long x, y;
-            do
+            double* angles = snewn(count, double);
+            subs[i] = snewn(n_sub, point);
+            sub_sizes[i] = n_sub;
+            sub = subs[i];
+            for (j = 0; j < count; j++)
+            {
+                angles[j] = (double) j * (2.0 * PI) / (double) count;
+            }
+            shuffle(angles, count, sizeof(double), rs);
+            for (j = 0; j < n_sub; j++)
             {
                 long r = random_upto(rs, (radii[i] - ((3 * COORDUNIT) / 2)) + 1) + COORDUNIT;
-                x = pts_min[i].x + (r * sin(angles[j]));
-                y = pts_min[i].y + (r * cos(angles[j]));
+                pt = sub + j;
+                pt->x = pts_min[i].x + (r * sin(angles[j]));
+                pt->y = pts_min[i].y + (r * cos(angles[j]));
+                pt->d = 1;
+                /**/printf("Created new subgraph point with coordinates x: %d, y: %d\n",
+                        (int) pt->x, (int) pt->y);/**/
             }
-            while (x < g_margin || x > (g_size - g_margin) ||
-                    y < g_margin || y > (g_size - g_margin));
-            pt = sub + j;
-            pt->x = x;
-            pt->y = y;
-            pt->d = 1;
-            /**/printf("Created new subgraph point with coordinates x: %d, y: %d\n",
-                    (int) pt->x, (int) pt->y);/**/
+            sfree(angles);
         }
         /**/printf("Finished creating subgraph %d\n", (int) i);/**/
     }
@@ -789,10 +787,10 @@ static char *new_game_desc(const game_params *params, random_state *rs,
             add234(vtcs_234, vx);
         }
         sub_offsets[i+1] = sub_offsets[i] + sub_sizes[i];
-        tmp = sub_sizes[i]; /* number of subgraph vertices */
-        while (tmp >= 2)
+        count = sub_sizes[i];
+        while (count >= 2)
         {
-            _addedge(edges_base, vtcs_234, subs[i], &tmp);
+            addedges(edges_base, vtcs_234, subs[i], &count);
         }
         freetree234(vtcs_234);
     }
@@ -821,15 +819,33 @@ static char *new_game_desc(const game_params *params, random_state *rs,
      * first.
      */
 
-    /* Assign random coordinates to the remaining points */
-    for (i = sub_offsets[n_min]; i < n_base; i++)
+    /*
+     * Generate random coordinates for the remaining points. The coordinates
+     * will be in the range (g_margin, g_size - g_margin).
+     */
+    size = g_size - (2 * g_margin);
+    count = (size / COORDUNIT) + 1;
+    coords_x = snewn(count, long);
+    coords_y = snewn(count, long);
+    for (i = 0; i <= size; i += COORDUNIT)
     {
-       pt = pts_base + i;
-       pt->x = coords_x[i + n_min - sub_offsets[n_min]];
-       pt->y = coords_y[i + n_min - sub_offsets[n_min]];
+        int idx = i / COORDUNIT;
+        coords_x[idx] = i + g_margin;
+        coords_y[idx] = i + g_margin;
+    }
+    shuffle(coords_x, count, sizeof(*coords_x), rs);
+    shuffle(coords_y, count, sizeof(*coords_y), rs);
+
+    /* Assign random coordinates to the remaining points */
+    count = n_base - sub_offsets[n_min];
+    for (i = 0; i < count; i++)
+    {
+       pt = pts_base + i + sub_offsets[n_min];
+       pt->x = coords_x[i];
+       pt->y = coords_y[i];
        pt->d = 1;
        /**/printf("Assigned remaining point %d with coordinates x: %d, y: %d\n",
-                    (int) i, (int) pt->x, (int) pt->y);/**/
+                    (int) (i + sub_offsets[n_min]), (int) pt->x, (int) pt->y);/**/
     }
     sfree(coords_x);
     sfree(coords_y);
@@ -870,10 +886,10 @@ static char *new_game_desc(const game_params *params, random_state *rs,
         vx->deg = 0;
         add234(vtcs_234, vx);
     }
-    tmp = n_base;
-    while (tmp >= 2)
+    count = n_base;
+    while (count >= 2)
     {
-        _addedge(edges_base, vtcs_234, pts_base, &tmp);
+        addedges(edges_base, vtcs_234, pts_base, &count);
     }
     sfree(vtcs_base);
     freetree234(vtcs_234);

@@ -10,7 +10,7 @@ The game begins by showing the player a bigger graph (the original graph) and a 
 - Run the perl script `mkfiles.pl`
 - Run the batch scipt `mkauto.sh`
 - Run `./configure`
-### Actual build
+### Actual build and subsequent builds
 - Finally run `make`
 
 ## Run the game
