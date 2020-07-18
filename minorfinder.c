@@ -534,12 +534,7 @@ static void addedges(tree234* edges, tree234* vertices, point* points, long* cnt
             }
         }
 
-        if (crossing)
-        {
-            i--;
-            continue;
-        }
-        else
+        if (!crossing)
         {
             /**/printf("Add edge from vertex %d to vertex %d to the edges 234-tree\n",
                         vxa->idx, vxb->idx);/**/
@@ -561,6 +556,10 @@ static void addedges(tree234* edges, tree234* vertices, point* points, long* cnt
             }
             vxa->deg++;
             if (vxa->deg >= MAXDEGREE) break;
+        }
+        else
+        {
+            i--;
         }
     }
 
@@ -768,32 +767,6 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     }
     sfree(radii);
 
-    /* Create the 234-tree that stores the edges of the base graph */
-    edges_base_234 = newtree234(edgecmp);
-
-    /*
-     * Add edges to the subgraphs of our base graph. Make sure that edges don't
-     * cross and the degree of the vertices does not increase beyond MAXDEGREE.
-     */
-    vtcs_base = snewn(n_base, vertex);
-    for (i = 0; i < n_min; i++)
-    {
-        vtcs_234 = newtree234(vertcmp);
-        for (j = sub_offsets[i]; j < sub_offsets[i+1]; j++)
-        {
-            vx = vtcs_base + j;
-            vx->idx = j;
-            vx->deg = 0;
-            add234(vtcs_234, vx);
-        }
-        count = sub_sizes[i];
-        while (count >= 2)
-        {
-            addedges(edges_base_234, vtcs_234, subs[i], &count);
-        }
-        freetree234(vtcs_234);
-    }
-
     /* Allocate memory for the base graph points */
     pts_base = snewn(n_base, point);
 
@@ -801,12 +774,58 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     for (i = 0; i < n_min; i++)
     {
         sub = subs[i];
-        for (j = 0; j < sub_sizes[i]; j++)
+        for (j = sub_offsets[i]; j < sub_offsets[i+1]; j++)
         {
-            pts_base[sub_offsets[i]+j] = sub[j];
+            pts_base[j] = sub[j-sub_offsets[i]];
             /**/printf("Copied subgraph point %ld of subgraph %ld into base graph points at %ld\n",
-                        j, i, sub_offsets[i] + j);/**/
+                        j - sub_offsets[i], i, j);/**/
         }
+    }
+    for (i = 0; i < n_min; i++) sfree(subs[i]);
+    sfree(subs);
+
+    /* Create the 234-tree that stores the edges of the base graph */
+    edges_base_234 = newtree234(edgecmp);
+
+    /*
+     * Add edges between the subgraphs in such a way that if the subgraphs would
+     * be replaced by the minor points again the outcome would be our minor graph.
+     */
+    vtcs_base = snewn(n_base, vertex);
+    for (i = 0; i < n_base; i++)
+    {
+        vx = vtcs_base + i;
+        vx->idx = i;
+        vx->deg = 0;
+    }
+    for (i = 0; (e = index234(edges_min_234, i)) != NULL; i++)
+    {
+        long idxa = random_upto(rs, sub_sizes[e->src]) + sub_offsets[e->src];
+        long idxb = random_upto(rs, sub_sizes[e->tgt]) + sub_offsets[e->tgt];
+        addedge(edges_base_234, idxa, idxb);
+        /**/printf("Add edge from vertex %ld (s:%d,p:%ld) to vertex %ld (s:%d,p:%ld) to the base graph edges 234-tree\n",
+                    idxa, e->src, idxa - sub_offsets[e->src], idxb, e->tgt, idxb - sub_offsets[e->tgt]);/**/
+        vtcs_base[idxa].deg++;
+        vtcs_base[idxb].deg++;
+    }
+
+    /*
+     * Add edges to the subgraphs of our base graph. Make sure that edges don't
+     * cross and the degree of the vertices does not increase beyond MAXDEGREE.
+     */
+    for (i = 0; i < n_min; i++)
+    {
+        vtcs_234 = newtree234(vertcmp);
+        for (j = sub_offsets[i]; j < sub_offsets[i+1]; j++)
+        {
+            add234(vtcs_234, vtcs_base + j);
+        }
+        count = sub_sizes[i];
+        while (count >= 2)
+        {
+            addedges(edges_base_234, vtcs_234, pts_base, &count);
+        }
+        freetree234(vtcs_234);
     }
 
     /*
@@ -850,38 +869,14 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     sfree(coords_y);
 
     /*
-     * Add edges between the subgraphs in such a way that if the subgraphs would
-     * be replaced by the minor points again the outcome would be our minor graph.
-     */
-    for (i = 0; (e = index234(edges_min_234, i)) != NULL; i++)
-    {
-        long idxa = random_upto(rs, sub_sizes[e->src]) + sub_offsets[e->src];
-        long idxb = random_upto(rs, sub_sizes[e->tgt]) + sub_offsets[e->tgt];
-        addedge(edges_base_234, idxa, idxb);
-        /**/printf("Added edge point %ld (vertex %ld), subgraph %d to p:%ld (v:%ld), s:%d to base graph edges\n",
-                    idxa - sub_offsets[e->src], idxa, e->src,
-                    idxb - sub_offsets[e->tgt], idxb, e->tgt);/**/
-        vtcs_base[idxa].deg++;
-        vtcs_base[idxb].deg++;
-    }
-
-    /*
      * Add edges to the base graph including the remaining points. Make sure that
      * edges don't cross and the degree of the vertices does not increase beyond
      * MAXDEGREE.
      */
     vtcs_234 = newtree234(vertcmp);
-    for (i = 0; i < sub_offsets[n_min]; i++)
+    for (i = 0; i < n_base; i++)
     {
-        vx = vtcs_base + i;
-        add234(vtcs_234, vx);
-    }
-    for (i = sub_offsets[n_min]; i < n_base; i++)
-    {
-        vx = vtcs_base + i;
-        vx->idx = i;
-        vx->deg = 0;
-        add234(vtcs_234, vx);
+        add234(vtcs_234, vtcs_base + i);
     }
     count = n_base;
     while (count >= 2)
@@ -956,52 +951,45 @@ static char *new_game_desc(const game_params *params, random_state *rs,
      */
     pt = pts_min;
     off = sprintf(ret, "%d-%ld-%ld", 0, pt->x, pt->y);
-    /**/printf("%d-%ld-%ld", 0, pt->x, pt->y);/**/
     sep = ",";
     for (i = 1; i < n_min; i++)
     {
         pt = pts_min + i;
         off += sprintf(ret + off, "%s%ld-%ld-%ld", sep, i, pt->x, pt->y);
-        /**/printf("%s%ld-%ld-%ld", sep, i, pt->x, pt->y);/**/
     }
     sep = ";";
     e = edges_min;
     off += sprintf(ret + off, "%s%d-%d", sep, e->src, e->tgt);
-    /**/printf("%s%d-%d", sep, e->src, e->tgt);/**/
     sep = ",";
     for (i = 1; i < count_min; i++)
     {
         e = edges_min + i;
         off += sprintf(ret + off, "%s%d-%d", sep, e->src, e->tgt);
-        /**/printf("%s%d-%d", sep, e->src, e->tgt);/**/
     }
     sep = ";";
     pt = pts_base;
     off += sprintf(ret + off, "%s%d-%ld-%ld", sep, 0, pt->x, pt->y);
-    /**/printf("%s%d-%ld-%ld", sep, 0, pt->x, pt->y);/**/
     sep = ",";
     for (i = 1; i < n_base; i++)
     {
         pt = pts_base + i;
         off += sprintf(ret + off, "%s%ld-%ld-%ld", sep, i, pt->x, pt->y);
-        /**/printf("%s%ld-%ld-%ld", sep, i, pt->x, pt->y);/**/
     }
     sep = ";";
     e = edges_base;
     off += sprintf(ret + off, "%s%d-%d", sep, e->src, e->tgt);
-    /**/printf("%s%d-%d", sep, e->src, e->tgt);/**/
     sep = ",";
     for (i = 1; i < count_base; i++)
     {
         e = edges_base + i;
         off += sprintf(ret + off, "%s%d-%d", sep, e->src, e->tgt);
-        /**/printf("%s%d-%d", sep, e->src, e->tgt);/**/
     }
+
+    /**/printf("printf length: %d, precalculated length: %d\n", printf("%s\n", ret) - 1, len);/**/
+
     sfree(edges_min);
     sfree(edges_base);
     }
-
-    /**/printf("\n");/**/
 
     /*
      * Last but not least we have to fill our aux string with some useful
@@ -1010,58 +998,59 @@ static char *new_game_desc(const game_params *params, random_state *rs,
      */
     *aux = NULL;
     {
-        const char* sep = "";
-        char* auxstr;
-        char buf[80];
-        int len = 0;
-        int off = 0;
+    const char* sep = "";
+    char* str;
+    char buf[80];
+    int len = 0;
+    int off = 0;
 
-        /*
-         * Calculate the length of our aux string. It will contain a sequence
-         * of encoded subgraph points. The subgraph points are separated by
-         * commas and are encoded like this:
-         * 
-         * <index in base points> - <subgraph index> - <index in subgraph>
-         * 
-         * The subgraphs are separated by semicolons.
-         */
-        for (i = 0; i < n_min; i++)
+    /*
+     * Calculate the length of our aux string. It will contain a sequence
+     * of encoded subgraph points. The subgraph points are separated by
+     * commas and the subgraphs themselves are separated by semicolons.
+     * The encoded string looks like this:
+     * 
+     * <subgraph index> : <index in subgraph> - <index in base points> , ... ; ...
+     */
+    for (i = 0; i < n_min; i++)
+    {
+        len += (sprintf(buf, "%ld", i) + 1);
+        for (j = sub_offsets[i]; j < sub_offsets[i+1]; j++)
         {
-            for (j = 0; j < sub_sizes[i]; j++)
-            {
-                len += (sprintf(buf, "%ld-%ld-%ld", sub_offsets[i] + j, i, j) + 1);
-            }
+            len += (sprintf(buf, "%ld-%ld", j - sub_offsets[i], j) + 1);
         }
+    }
 
-        /*
-         * Allocate memory for len chars, that is exactly the length of our aux
-         * string including a trailing '\0'.
-         */
-        auxstr = snewn(len, char);
+    /*
+     * Allocate memory for len chars, that is exactly the length of our aux
+     * string including a trailing '\0'.
+     */
+    str = snewn(len, char);
 
-        /*
-         * Now encode the subgraph data and write it into the allocated aux string.
-         */
-        for (i = 0; i < n_min; i++)
+    /*
+     * Now encode the subgraph data and write it into the allocated aux string.
+     */
+    for (i = 0; i < n_min; i++)
+    {
+        off += sprintf(str + off, "%s%ld", sep,  i);
+        sep = ":";
+        for (j = sub_offsets[i]; j < sub_offsets[i+1]; j++)
         {
-            for (j = 0; j < sub_sizes[i]; j++)
-            {
-                off += sprintf(ret + off, "%s%ld-%ld-%ld", sep, sub_offsets[i] + j, i, j);
-                /**/printf("%s%ld-%ld-%ld", sep, sub_offsets[i] + j, i, j);/**/
-                sep = ",";
-            }
-            sep = ";";
+            off += sprintf(str + off, "%s%ld-%ld", sep, j - sub_offsets[i], j);
+            sep = ",";
         }
+        sep = ";";
+    }
 
-        *aux = auxstr;
+    /**/printf("printf length: %d, precalculated length: %d\n", printf("%s\n", str) - 1, len);/**/
+
+    *aux = str;
     }
 
     sfree(pts_min);
     sfree(pts_base);
     sfree(sub_sizes);
     sfree(sub_offsets);
-    for (i = 0; i < n_min; i++) sfree(subs[i]);
-    sfree(subs);
     while ((e = delpos234(edges_min_234, 0)) != NULL) sfree(e);
     freetree234(edges_min_234);
     while ((e = delpos234(edges_base_234, 0)) != NULL) sfree(e);
