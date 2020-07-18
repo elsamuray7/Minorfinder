@@ -49,7 +49,7 @@ typedef struct point {
 /* A vertex that corresponds to a point in a graph. */
 typedef struct vertex {
 
-    int idx; /* points array index */
+    long idx; /* points array index */
 
     int deg;
 
@@ -62,8 +62,8 @@ typedef struct vertex {
  */
 typedef struct edge {
 
-    int src;
-    int tgt;
+    long src;
+    long tgt;
 
 } edge;
 
@@ -91,8 +91,8 @@ struct game_state {
 
     game_params params;
 
-    int width;
-    int height;
+    long width;
+    long height;
 
     graph* base;
     graph* minor;
@@ -499,7 +499,7 @@ static void addedges(tree234* edges, tree234* vertices, point* points, long* cnt
     int i;
     vertex* vxa = delpos234(vertices, 0);
     (*cnt)--;
-    /**/printf("Creating edges from vertex %d\n", vxa->idx);/**/
+    /*printf("Creating edges from vertex %ld\n", vxa->idx);*/
 
     for (i = (*cnt) - 1; i >= 0;)
     {
@@ -507,12 +507,12 @@ static void addedges(tree234* edges, tree234* vertices, point* points, long* cnt
         int j;
         vertex* vxb = index234(vertices, i);
         edge* e;
-        /**/printf("Creating edges to vertex %d\n", vxb->idx);/**/
+        /*printf("Creating edges to vertex %ld\n", vxb->idx);*/
 
         if (isedge(edges, vxa->idx, vxb->idx)) 
         {
-            /**/printf("Found existing edge from vertex %d to vertex %d\n",
-                        vxa->idx, vxb->idx);/**/
+            /*printf("Found existing edge from vertex %ld to vertex %ld\n",
+                        vxa->idx, vxb->idx);*/
             i--;
             continue;
         }
@@ -527,8 +527,8 @@ static void addedges(tree234* edges, tree234* vertices, point* points, long* cnt
             else if (cross(points[vxa->idx], points[vxb->idx],
                             points[e->src], points[e->tgt]))
             {
-                /**/printf("Found crossing between edges %d-%d and %d-%d\n",
-                            vxa->idx, vxb->idx, e->src, e->tgt);/**/
+                /*printf("Found crossing between edges %ld-%ld and %ld-%ld\n",
+                            vxa->idx, vxb->idx, e->src, e->tgt);*/
                 crossing = true;
                 break;
             }
@@ -536,21 +536,21 @@ static void addedges(tree234* edges, tree234* vertices, point* points, long* cnt
 
         if (!crossing)
         {
-            /**/printf("Add edge from vertex %d to vertex %d to the edges 234-tree\n",
-                        vxa->idx, vxb->idx);/**/
+            /*printf("Add edge from vertex %ld to vertex %ld to the edges 234-tree\n",
+                        vxa->idx, vxb->idx);*/
             addedge(edges, vxa->idx, vxb->idx);
             del234(vertices, vxb);
             vxb->deg++;
             if (vxb->deg < MAXDEGREE)
             {
-                /**/printf("Update vertex %d in the vertices 234-tree\n",
-                            vxb->idx);/**/
+                /*printf("Update vertex %ld in the vertices 234-tree\n",
+                            vxb->idx)*/
                 add234(vertices, vxb);
             }
             else
             {
-                /**/printf("Delete vertex %d in the vertices 234-tree\n",
-                            vxb->idx);/**/
+                /*printf("Delete vertex %ld in the vertices 234-tree\n",
+                            vxb->idx)*/
                 (*cnt)--;
                 i--;
             }
@@ -563,7 +563,7 @@ static void addedges(tree234* edges, tree234* vertices, point* points, long* cnt
         }
     }
 
-    /**/printf("Finished creating edges from vertex %d\n", vxa->idx);/**/
+    /*printf("Finished creating edges from vertex %ld\n", vxa->idx)*/
 }
 
 /* denominator must divide PREFFERED_TILESIZE, i.e. 64 */
@@ -616,7 +616,7 @@ static char *new_game_desc(const game_params *params, random_state *rs,
      */
     g_size = COORDLIMIT(n_base) * PREFERRED_TILESIZE;
     g_margin = COORDMARGIN(g_size);
-    /**/printf("Set grid size: %ld and margin: %ld\n", g_size, g_margin);/**/
+    /*printf("Set grid size: %ld and margin: %ld\n", g_size, g_margin)*/
 
     /*
      * Generate random coordinates for the points of the minor. The coordinates will
@@ -646,8 +646,8 @@ static char *new_game_desc(const game_params *params, random_state *rs,
         pt->x = coords_x[i];
         pt->y = coords_y[i];
         pt->d = 1;
-        /**/printf("Assigned minor point %ld with coordinates x: %ld, y: %ld\n",
-                    i, pt->x, pt->y);/**/
+        /*printf("Assigned minor point %ld with coordinates x: %ld, y: %ld\n",
+                    i, pt->x, pt->y)*/
     }
     sfree(coords_x);
     sfree(coords_y);
@@ -685,11 +685,12 @@ static char *new_game_desc(const game_params *params, random_state *rs,
      * to its nearest neighbour. The distances are used to calculate the radii
      * of circular subgraph areas around the points of our minor.
      */
-    size = g_size - (2 * g_margin);
+    size = g_size - g_margin;
     radii = snewn(n_min, long);
     for (i = 0; i < n_min; i++)
     {
-        radii[i] = size;
+        radii[i] = min(min(pts_min[i].x - g_margin, size - pts_min[i].x),
+                        min(pts_min[i].y - g_margin, size - pts_min[i].y));
     }
     for (i = 0; i < n_min - 1; i++)
     {
@@ -701,14 +702,14 @@ static char *new_game_desc(const game_params *params, random_state *rs,
             if (dist < radii[i])
             {
                 radii[i] = dist;
-                /**/printf("Assigned new minimal distance %ld from minor point %ld to %ld\n",
-                        radii[i], i, j);/**/
+                /*printf("Assigned new minimal distance %ld from minor point %ld to %ld\n",
+                        radii[i], i, j)*/
             }
             if (dist < radii[j])
             {
                 radii[j] = dist;
-                /**/printf("Assigned new minimal distance %ld from minor point %ld to %ld\n",
-                        radii[j], j, i);/**/
+                /*printf("Assigned new minimal distance %ld from minor point %ld to %ld\n",
+                        radii[j], j, i)*/
             }
         }
     }
@@ -729,7 +730,7 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     *sub_offsets = 0;
     for (i = 0; i < n_min; i++)
     {
-        /**/printf("Creating subgraph that replaces minor point %ld\n", i);/**/
+        /*printf("Creating subgraph that replaces minor point %ld\n", i)*/
         if (radii[i] < margin)
         {
             subs[i] = snew(point);
@@ -737,7 +738,7 @@ static char *new_game_desc(const game_params *params, random_state *rs,
             sub_offsets[i+1] = sub_offsets[i] + 1;
             sub = subs[i];
             *sub = pts_min[i];
-            /**/printf("Copied minor point into subgraph %ld\n", i);/**/
+            /*printf("Copied minor point into subgraph %ld\n", i)*/
         }
         else
         {
@@ -758,12 +759,12 @@ static char *new_game_desc(const game_params *params, random_state *rs,
                 pt->x = pts_min[i].x + (r * sin(angles[j]));
                 pt->y = pts_min[i].y + (r * cos(angles[j]));
                 pt->d = 1;
-                /**/printf("Created new subgraph point with coordinates x: %ld, y: %ld\n",
-                        pt->x, pt->y);/**/
+                /*printf("Created new subgraph point with coordinates x: %ld, y: %ld\n",
+                        pt->x, pt->y)*/
             }
             sfree(angles);
         }
-        /**/printf("Finished creating subgraph %ld\n", i);/**/
+        /*printf("Finished creating subgraph %ld\n", i)*/
     }
     sfree(radii);
 
@@ -777,8 +778,8 @@ static char *new_game_desc(const game_params *params, random_state *rs,
         for (j = sub_offsets[i]; j < sub_offsets[i+1]; j++)
         {
             pts_base[j] = sub[j-sub_offsets[i]];
-            /**/printf("Copied subgraph point %ld of subgraph %ld into base graph points at %ld\n",
-                        j - sub_offsets[i], i, j);/**/
+            /*printf("Copied subgraph point %ld of subgraph %ld into base graph points at %ld\n",
+                        j - sub_offsets[i], i, j)*/
         }
     }
     for (i = 0; i < n_min; i++) sfree(subs[i]);
@@ -803,8 +804,8 @@ static char *new_game_desc(const game_params *params, random_state *rs,
         long idxa = random_upto(rs, sub_sizes[e->src]) + sub_offsets[e->src];
         long idxb = random_upto(rs, sub_sizes[e->tgt]) + sub_offsets[e->tgt];
         addedge(edges_base_234, idxa, idxb);
-        /**/printf("Add edge from vertex %ld (s:%d,p:%ld) to vertex %ld (s:%d,p:%ld) to the base graph edges 234-tree\n",
-                    idxa, e->src, idxa - sub_offsets[e->src], idxb, e->tgt, idxb - sub_offsets[e->tgt]);/**/
+        /*printf("Add edge from vertex %ld (s:%ld,p:%ld) to vertex %ld (s:%ld,p:%ld) to the base graph edges 234-tree\n",
+                    idxa, e->src, idxa - sub_offsets[e->src], idxb, e->tgt, idxb - sub_offsets[e->tgt])*/
         vtcs_base[idxa].deg++;
         vtcs_base[idxb].deg++;
     }
@@ -862,8 +863,8 @@ static char *new_game_desc(const game_params *params, random_state *rs,
        pt->x = coords_x[i];
        pt->y = coords_y[i];
        pt->d = 1;
-       /**/printf("Assigned remaining point %ld with coordinates x: %ld, y: %ld\n",
-                    i + sub_offsets[n_min], pt->x, pt->y);/**/
+       /*printf("Assigned remaining point %ld with coordinates x: %ld, y: %ld\n",
+                    i + sub_offsets[n_min], pt->x, pt->y)*/
     }
     sfree(coords_x);
     sfree(coords_y);
@@ -893,10 +894,10 @@ static char *new_game_desc(const game_params *params, random_state *rs,
      */
     ret = NULL;
     {
-    const char* sep;
+    const char* sep = ",";
     char buf[80];
     int len = 0;
-    int off;
+    int off = 0;
     long count_min = count234(edges_min_234);
     long count_base = count234(edges_base_234);
     edge* edges_min = snewn(count_min, edge);
@@ -926,7 +927,7 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     for (i = 0; (e = index234(edges_min_234, i)) != NULL; i++)
     {
         edges_min[i] = *e;
-        len += (sprintf(buf, "%d-%d", e->src, e->tgt) + 1);
+        len += (sprintf(buf, "%ld-%ld", e->src, e->tgt) + 1);
     }
     for (i = 0; i < n_base; i++)
     {
@@ -936,56 +937,56 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     for (i = 0; (e = index234(edges_base_234, i)) != NULL; i++)
     {
         edges_base[i] = *e;
-        len += (sprintf(buf, "%d-%d", e->src, e->tgt) + 1);
+        len += (sprintf(buf, "%ld-%ld", e->src, e->tgt) + 1);
     }
 
     /*
      * Allocate memory for len chars, that is exactly the length of our game
      * description including a trailing '\0'.
      */
-    ret = snewn(len, char);
+    ret = snewn(len++, char);
     
     /*
      * Now encode the game description and write it into the allocated string
      * that will be connected to our return value.
      */
-    pt = pts_min;
-    off = sprintf(ret, "%d-%ld-%ld", 0, pt->x, pt->y);
-    sep = ",";
-    for (i = 1; i < n_min; i++)
+    for (i = 0; i < n_min - 1; i++)
     {
         pt = pts_min + i;
-        off += sprintf(ret + off, "%s%ld-%ld-%ld", sep, i, pt->x, pt->y);
+        off += sprintf(ret + off, "%ld-%ld-%ld%s", i, pt->x, pt->y, sep);
     }
     sep = ";";
-    e = edges_min;
-    off += sprintf(ret + off, "%s%d-%d", sep, e->src, e->tgt);
+    pt = pts_min + n_min - 1;
+    off += sprintf(ret + off, "%d-%ld-%ld%s", n_min - 1, pt->x, pt->y, sep);
     sep = ",";
-    for (i = 1; i < count_min; i++)
+    for (i = 0; i < count_min - 1; i++)
     {
         e = edges_min + i;
-        off += sprintf(ret + off, "%s%d-%d", sep, e->src, e->tgt);
+        off += sprintf(ret + off, "%ld-%ld%s",e->src, e->tgt, sep);
     }
     sep = ";";
-    pt = pts_base;
-    off += sprintf(ret + off, "%s%d-%ld-%ld", sep, 0, pt->x, pt->y);
+    e = edges_min + count_min - 1;
+    off += sprintf(ret + off, "%ld-%ld%s", e->src, e->tgt, sep);
     sep = ",";
-    for (i = 1; i < n_base; i++)
+    for (i = 0; i < n_base - 1; i++)
     {
         pt = pts_base + i;
-        off += sprintf(ret + off, "%s%ld-%ld-%ld", sep, i, pt->x, pt->y);
+        off += sprintf(ret + off, "%ld-%ld-%ld%s", i, pt->x, pt->y, sep);
     }
     sep = ";";
-    e = edges_base;
-    off += sprintf(ret + off, "%s%d-%d", sep, e->src, e->tgt);
+    pt = pts_base + n_base - 1;
+    off += sprintf(ret + off, "%d-%ld-%ld%s", n_base - 1, pt->x, pt->y, sep);
     sep = ",";
-    for (i = 1; i < count_base; i++)
+    for (i = 0; i < count_base - 1; i++)
     {
         e = edges_base + i;
-        off += sprintf(ret + off, "%s%d-%d", sep, e->src, e->tgt);
+        off += sprintf(ret + off, "%ld-%ld%s", e->src, e->tgt, sep);
     }
+    sep = ";";
+    e = edges_base + count_base - 1;
+    off += sprintf(ret + off, "%ld-%ld%s", e->src, e->tgt, sep);
 
-    /**/printf("printf length: %d, precalculated length: %d\n", printf("%s\n", ret) - 1, len);/**/
+    /*printf("printf length: %d, precalculated length: %d\n", printf("%s\n", ret) - 1, len)*/
 
     sfree(edges_min);
     sfree(edges_base);
@@ -998,7 +999,7 @@ static char *new_game_desc(const game_params *params, random_state *rs,
      */
     *aux = NULL;
     {
-    const char* sep = "";
+    const char* sep;
     char* str;
     char buf[80];
     int len = 0;
@@ -1025,24 +1026,25 @@ static char *new_game_desc(const game_params *params, random_state *rs,
      * Allocate memory for len chars, that is exactly the length of our aux
      * string including a trailing '\0'.
      */
-    str = snewn(len, char);
+    str = snewn(len++, char);
 
     /*
      * Now encode the subgraph data and write it into the allocated aux string.
      */
     for (i = 0; i < n_min; i++)
     {
-        off += sprintf(str + off, "%s%ld", sep,  i);
         sep = ":";
-        for (j = sub_offsets[i]; j < sub_offsets[i+1]; j++)
+        off += sprintf(str + off, "%ld%s", i, sep);
+        sep = ",";
+        for (j = sub_offsets[i]; j < sub_offsets[i+1] - 1; j++)
         {
-            off += sprintf(str + off, "%s%ld-%ld", sep, j - sub_offsets[i], j);
-            sep = ",";
+            off += sprintf(str + off, "%ld-%ld%s", j - sub_offsets[i], j, sep);
         }
         sep = ";";
+        off += sprintf(str + off, "%ld-%ld%s", (sub_offsets[i+1] - 1) - sub_offsets[i], sub_offsets[i+1] - 1, sep);
     }
 
-    /**/printf("printf length: %d, precalculated length: %d\n", printf("%s\n", str) - 1, len);/**/
+    /*printf("printf length: %d, precalculated length: %d\n", printf("%s\n", str) - 1, len)*/
 
     *aux = str;
     }
@@ -1064,12 +1066,81 @@ static const char *validate_desc(const game_params *params, const char *desc)
     return NULL;
 }
 
+static graph* parse_graph(const char** desc, int n, long lim, long mar)
+{
+    graph* g = snew(graph);
+    g->refcount = 1;
+    point* pt;
+    point* points = (g->points = snewn(n, point));
+    tree234* edges = (g->edges = newtree234(edgecmp));
+    long idx, x, y;
+    long src, tgt;
+    while (**desc)
+    {
+        idx = atol(*desc);
+        printf("%ld-", idx);
+        assert(idx >= 0 && idx < n);
+        while (**desc && isdigit((unsigned char) **desc)) (*desc)++;
+
+        assert(**desc == '-');
+        (*desc)++;
+
+        x = atol(*desc);
+        printf("%ld-", x);
+        assert(x >= mar && x <= lim);
+        while (**desc && isdigit((unsigned char) **desc)) (*desc)++;
+
+        assert(**desc == '-');
+        (*desc)++;
+
+        y = atol(*desc);
+        printf("%ld\n", y);
+        assert(y >= mar && y <= lim);
+        while (**desc && isdigit((unsigned char) **desc)) (*desc)++;
+
+        pt = points + idx;
+        pt->x = x;
+        pt->y = y;
+        pt->d = 1;
+
+        assert(**desc == ',' || **desc == ';');
+        if (*((*desc)++) == ';') break;
+    }
+    while (**desc)
+    {
+        src = atol(*desc);
+        printf("%ld-", src);
+        assert(src >= 0 && src < n);
+        while (**desc && isdigit((unsigned char) **desc)) (*desc)++;
+        assert(**desc == '-');
+        (*desc)++;
+
+        tgt = atol(*desc);
+        printf("%ld\n", tgt);
+        assert(tgt >= 0 && tgt < n);
+        while (**desc && isdigit((unsigned char) **desc)) (*desc)++;
+
+        addedge(edges, src, tgt);
+
+        assert(**desc == ',' || **desc == ';');
+        if (*((*desc)++) == ';') break;
+    }
+
+    return g;
+}
+
 static game_state *new_game(midend *me, const game_params *params,
                             const char *desc)
 {
     game_state *state = snew(game_state);
-
-    /* state->FIXME = 0; */
+    state->params = *params;
+    long g_size = COORDLIMIT(params->n_base) * PREFERRED_TILESIZE;
+    long g_margin = COORDMARGIN(g_size);
+    state->width = 2 * g_size;
+    state->height = g_size;
+    state->minor = parse_graph(&desc, params->n_min, g_size - g_margin, g_margin);
+    state->base = parse_graph(&desc, params->n_base, g_size - g_margin, g_margin);
+    state->solved = false;
 
     return state;
 }
