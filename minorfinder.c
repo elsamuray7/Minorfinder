@@ -29,6 +29,9 @@
 
 #define PREFERRED_TILESIZE 64
 
+#define DEFAULT_N_BASE 12
+#define DEFAULT_N_MIN 5
+
 enum {
     COL_BACKGROUND,
     NCOLOURS
@@ -109,8 +112,8 @@ static game_params *default_params(void)
 {
     game_params *ret = snew(game_params);
 
-    ret->n_base = 12;
-    ret->n_min = 5;
+    ret->n_base = DEFAULT_N_BASE;
+    ret->n_min = DEFAULT_N_MIN;
 
     return ret;
 }
@@ -125,22 +128,22 @@ static bool game_fetch_preset(int i, char **name, game_params **params)
     switch (i)
     {
         case 0:
-            n_base = 12;
-            n_min = 5;
+            n_base = DEFAULT_N_BASE;
+            n_min = DEFAULT_N_MIN;
             break;
         case 1:
-            n_base = 18;
+            n_base = 16;
             n_min = 5;
             break;
         case 2:
-            n_base = 24;
-            n_min = 5;
+            n_base = 20;
+            n_min = 6;
             break;
         default:
             return false;
     }
 
-    sprintf(buf, "%d+%d points", n_base, n_min);
+    sprintf(buf, "%d base, %d minor points", n_base, n_min);
     *name = dupstr(buf);
 
     ret = snew(game_params);
@@ -165,11 +168,31 @@ static game_params *dup_params(const game_params *params)
 
 static void decode_params(game_params *params, char const *string)
 {
+    if (*(string++) == 'b') {
+        params->n_base = atoi(string);
+        while (*string && isdigit((unsigned char) *string)) string++;
+    }
+    else
+    {
+        params->n_base = DEFAULT_N_BASE;
+    }
+    if (*(string++) == 'm')
+    {
+        params->n_min = atoi(string);
+    }
+    else
+    {
+        params->n_min = DEFAULT_N_MIN;
+    }
 }
 
 static char *encode_params(const game_params *params, bool full)
 {
-    return dupstr("FIXME");
+    char buf[80];
+
+    sprintf(buf, "b%dm%d", params->n_base, params->n_min);
+    
+    return dupstr(buf);
 }
 
 static config_item *game_configure(const game_params *params)
@@ -184,6 +207,15 @@ static game_params *custom_params(const config_item *cfg)
 
 static const char *validate_params(const game_params *params, bool full)
 {
+    if (params->n_base < 12)
+        return "Number of base graph points must be at least 12";
+    if (params->n_min < 5)
+        return "Number of minor points must be at least 5";
+    /*
+     * TODO:
+     * If we experience performance issues we could also think of an upper limit
+     * for our params.
+     */
     return NULL;
 }
 
@@ -579,12 +611,12 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     
     const int n_min = params->n_min;
     const int n_base = params->n_base;
-    const int n_sub = ((5 * n_base) / 6) / n_min;
+    const int n_sub = n_base / n_min;
     int* sub_sizes;
 
     long i, j;
+    long margin_min = 4 * COORDUNIT;
     long size;
-    long margin;
     long count;
     long g_size;
     long g_margin;
@@ -622,16 +654,15 @@ static char *new_game_desc(const game_params *params, random_state *rs,
      * Generate random coordinates for the points of the minor. The coordinates will
      * be in the range (g_margin + margin, g_size - g_margin - margin).
      */
-    margin = 4 * COORDUNIT;
-    size = g_size - (2 * (g_margin + margin));
+    size = g_size - (2 * (g_margin + margin_min));
     count = (size / COORDUNIT) + 1;
     coords_x = snewn(count, long);
     coords_y = snewn(count, long);
     for (i = 0; i <= size; i += COORDUNIT)
     {
         int idx = i / COORDUNIT;
-        coords_x[idx] = i + g_margin + margin;
-        coords_y[idx] = i + g_margin + margin;
+        coords_x[idx] = i + g_margin + margin_min;
+        coords_y[idx] = i + g_margin + margin_min;
     }
     shuffle(coords_x, count, sizeof(*coords_x), rs);
     shuffle(coords_y, count, sizeof(*coords_y), rs);
@@ -689,16 +720,17 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     radii = snewn(n_min, long);
     for (i = 0; i < n_min; i++)
     {
-        radii[i] = min(min(pts_min[i].x - g_margin, size - pts_min[i].x),
-                        min(pts_min[i].y - g_margin, size - pts_min[i].y));
+        pt = pts_min + i;
+        radii[i] = min(min(pt->x - g_margin, size - pt->x),
+                        min(pt->y - g_margin, size - pt->y));
     }
     for (i = 0; i < n_min - 1; i++)
     {
-        point* pta = pts_min + i;
+        pt = pts_min + i;
         for (j = i + 1; j < n_min; j++)
         {
             point* ptb = pts_min + j;
-            long dist = squarert(square(pta->x - ptb->x) + square(pta->y - ptb->y)) / 2;
+            long dist = squarert(square(pt->x - ptb->x) + square(pt->y - ptb->y)) / 2;
             if (dist < radii[i])
             {
                 radii[i] = dist;
@@ -726,12 +758,11 @@ static char *new_game_desc(const game_params *params, random_state *rs,
      * as radius.
      */
     count = 4 * n_sub;
-    margin = 4 * COORDUNIT;
     *sub_offsets = 0;
     for (i = 0; i < n_min; i++)
     {
         /*printf("Creating subgraph that replaces minor point %ld\n", i)*/
-        if (radii[i] < margin)
+        if (radii[i] < margin_min)
         {
             subs[i] = snew(point);
             sub_sizes[i] = 1;
@@ -941,10 +972,10 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     }
 
     /*
-     * Allocate memory for len chars, that is exactly the length of our game
+     * Allocate memory for len+1 chars, that is exactly the length of our game
      * description including a trailing '\0'.
      */
-    ret = snewn(len++, char);
+    ret = snewn(++len, char);
     
     /*
      * Now encode the game description and write it into the allocated string
@@ -1023,10 +1054,10 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     }
 
     /*
-     * Allocate memory for len chars, that is exactly the length of our aux
+     * Allocate memory for len+1 chars, that is exactly the length of our aux
      * string including a trailing '\0'.
      */
-    str = snewn(len++, char);
+    str = snewn(++len, char);
 
     /*
      * Now encode the subgraph data and write it into the allocated aux string.
@@ -1061,9 +1092,76 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     return ret;
 }
 
+static const char* validate_graph(const char** desc, int n, long lim, long mar)
+{
+    long idx, x, y;
+    long src, tgt;
+    while (**desc)
+    {
+        idx = atol(*desc);
+        if(idx < 0 || idx >= n)
+            return "Point index out of range in game description";
+        while (**desc && isdigit((unsigned char) (**desc))) (*desc)++;
+
+        if (**desc != '-')
+            return "Expected '-' after point index in game description";
+        (*desc)++;
+
+        x = atol(*desc);
+        if (x < mar || x > lim)
+            return "X-coordinate out of range in game description";
+        while (**desc && isdigit((unsigned char) (**desc))) (*desc)++;
+
+        if (**desc != '-')
+            return "Expected '-' after point index in game description";
+        (*desc)++;
+
+        y = atol(*desc);
+        if (y < mar || y > lim)
+            return "Y-coordinate out of range in game description";
+        while (**desc && isdigit((unsigned char) (**desc))) (*desc)++;
+
+        if (**desc != ',' && **desc != ';')
+            return "Expected ',' or ';' after y-coordinate in game description";
+        if (*((*desc)++) == ';') break;
+    }
+    while (**desc)
+    {
+        src = atol(*desc);
+        if (src < 0 || src >= n)
+            return "Edge source index out of range in game description";
+        while (**desc && isdigit((unsigned char) (**desc))) (*desc)++;
+
+        if (**desc != '-')
+            return "Expected '-' after edge source index in game description";
+        (*desc)++;
+
+        tgt = atol(*desc);
+        if (tgt < 0 || tgt >= n)
+            return "Edge target index out of range in game description";
+        while (**desc && isdigit((unsigned char) (**desc))) (*desc)++;
+
+        if (**desc != ',' && **desc != ';')
+            return "Expected ',' or ';' after edge target in game description";
+        if (*((*desc)++) == ';') break;
+    }    
+
+    return NULL;
+}
+
 static const char *validate_desc(const game_params *params, const char *desc)
 {
-    return NULL;
+    const char* _desc = desc; /* pointer copy */
+    const char* err;
+    long g_size = COORDLIMIT(params->n_base) * PREFERRED_TILESIZE;
+    long g_margin = COORDMARGIN(g_size);
+    if ((err = validate_graph(&_desc, params->n_min, g_size - g_margin, g_margin)) != NULL)
+        return err;
+    else if ((err = validate_graph(&_desc, params->n_base, g_size - g_margin, g_margin)) != NULL)
+        return err;
+    else
+        return NULL;
+    
 }
 
 static graph* parse_graph(const char** desc, int n, long lim, long mar)
@@ -1071,16 +1169,16 @@ static graph* parse_graph(const char** desc, int n, long lim, long mar)
     graph* g = snew(graph);
     g->refcount = 1;
     point* pt;
-    point* points = (g->points = snewn(n, point));
-    tree234* edges = (g->edges = newtree234(edgecmp));
+    g->points = snewn(n, point);
+    g->edges = newtree234(edgecmp);
     long idx, x, y;
     long src, tgt;
-    while (**desc)
+    do
     {
         idx = atol(*desc);
         printf("%ld-", idx);
         assert(idx >= 0 && idx < n);
-        while (**desc && isdigit((unsigned char) **desc)) (*desc)++;
+        while (**desc && isdigit((unsigned char) (**desc))) (*desc)++;
 
         assert(**desc == '-');
         (*desc)++;
@@ -1088,7 +1186,7 @@ static graph* parse_graph(const char** desc, int n, long lim, long mar)
         x = atol(*desc);
         printf("%ld-", x);
         assert(x >= mar && x <= lim);
-        while (**desc && isdigit((unsigned char) **desc)) (*desc)++;
+        while (**desc && isdigit((unsigned char) (**desc))) (*desc)++;
 
         assert(**desc == '-');
         (*desc)++;
@@ -1096,35 +1194,36 @@ static graph* parse_graph(const char** desc, int n, long lim, long mar)
         y = atol(*desc);
         printf("%ld\n", y);
         assert(y >= mar && y <= lim);
-        while (**desc && isdigit((unsigned char) **desc)) (*desc)++;
+        while (**desc && isdigit((unsigned char) (**desc))) (*desc)++;
 
-        pt = points + idx;
+        pt = g->points + idx;
         pt->x = x;
         pt->y = y;
         pt->d = 1;
 
         assert(**desc == ',' || **desc == ';');
-        if (*((*desc)++) == ';') break;
     }
-    while (**desc)
+    while (*((*desc)++) != ';');
+    do
     {
         src = atol(*desc);
         printf("%ld-", src);
         assert(src >= 0 && src < n);
-        while (**desc && isdigit((unsigned char) **desc)) (*desc)++;
+        while (**desc && isdigit((unsigned char) (**desc))) (*desc)++;
+
         assert(**desc == '-');
         (*desc)++;
 
         tgt = atol(*desc);
         printf("%ld\n", tgt);
         assert(tgt >= 0 && tgt < n);
-        while (**desc && isdigit((unsigned char) **desc)) (*desc)++;
+        while (**desc && isdigit((unsigned char) (**desc))) (*desc)++;
 
-        addedge(edges, src, tgt);
+        addedge(g->edges, src, tgt);
 
         assert(**desc == ',' || **desc == ';');
-        if (*((*desc)++) == ';') break;
     }
+    while (*((*desc)++) != ';');
 
     return g;
 }
@@ -1132,14 +1231,15 @@ static graph* parse_graph(const char** desc, int n, long lim, long mar)
 static game_state *new_game(midend *me, const game_params *params,
                             const char *desc)
 {
+    const char* _desc = desc; /* pointer copy */
     game_state *state = snew(game_state);
     state->params = *params;
     long g_size = COORDLIMIT(params->n_base) * PREFERRED_TILESIZE;
     long g_margin = COORDMARGIN(g_size);
     state->width = 2 * g_size;
     state->height = g_size;
-    state->minor = parse_graph(&desc, params->n_min, g_size - g_margin, g_margin);
-    state->base = parse_graph(&desc, params->n_base, g_size - g_margin, g_margin);
+    state->minor = parse_graph(&_desc, params->n_min, g_size - g_margin, g_margin);
+    state->base = parse_graph(&_desc, params->n_base, g_size - g_margin, g_margin);
     state->solved = false;
 
     return state;
@@ -1149,13 +1249,37 @@ static game_state *dup_game(const game_state *state)
 {
     game_state *ret = snew(game_state);
 
-    /* ret->FIXME = state->FIXME; */
+    ret->params = state->params;
+    ret->width = state->width;
+    ret->height = state->height;
+    ret->minor = state->minor;
+    ret->minor->refcount++;
+    ret->base = state->base;
+    ret->base->refcount++;
+    ret->solved = state->solved;
 
     return ret;
 }
 
 static void free_game(game_state *state)
 {
+    edge* e;
+    state->minor->refcount--;
+    state->base->refcount--;
+    if (state->minor->refcount <= 0)
+    {
+        sfree(state->minor->points);
+        while((e = delpos234(state->minor->edges, 0)) != NULL) sfree(e);
+        freetree234(state->minor->edges);
+        sfree(state->minor);
+    }
+    if (state->base->refcount <= 0)
+    {
+        sfree(state->base->points);
+        while((e = delpos234(state->base->edges, 0)) != NULL) sfree(e);
+        freetree234(state->base->edges);
+        sfree(state->base);
+    }
     sfree(state);
 }
 
