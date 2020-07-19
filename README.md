@@ -19,4 +19,4 @@ The game begins by showing the player a bigger graph (the original graph) and a 
 ## Submitting issues
 - <b>Description</b> of the issue
 - <b>Suggestions / Solutions</b> for the issue
-- <b>Label the issue</b>, e.g. <i>enhancement, bug, etc.</i>
+- <b>Label</b> the issue, e.g. <i>enhancement, bug, etc.</i>
