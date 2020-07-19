@@ -1,6 +1,6 @@
 # Bachelor Thesis of Samuel Holderbach
 
-# What this is about
+## What this is about
 A simple graph puzzle called <i>Minorensucher</i> or <i>minorfinder</i>.
 The game begins by showing the player a bigger graph (the original graph) and a smaller one (the minor). To solve the puzzle the player has to contract eges untill the original graph is isomorphic to the minor.
 
@@ -15,3 +15,8 @@ The game begins by showing the player a bigger graph (the original graph) and a 
 
 ## Run the game
 - Run `./minorfinder`
+
+## Submitting issues
+- <b>Description</b> of the issue
+- <b>Suggestions / Solutions</b> for the issue
+- <b>Label the issue</b>, e.g. <i>enhancement, bug, etc.</i>
