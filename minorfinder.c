@@ -29,9 +29,6 @@
 
 #define PREFERRED_TILESIZE 64
 
-#define DEFAULT_N_BASE 12
-#define DEFAULT_N_MIN 5
-
 enum {
     COL_BACKGROUND,
     COL_BASEPOINT,
@@ -44,66 +41,94 @@ enum {
 };
 
 /*
- * A point in a grid, spefified by its coordinates and its
- * respective denominator.
+ * A grid, defines a region of a window
+ */
+enum grid {
+    GRID_LEFT,
+    GRID_RIGHT,
+    NGRIDS
+};
+
+enum {
+    DEFAULT_N_BASE = 12,
+    DEFAULT_N_MIN = 5
+};
+
+/*
+ * A point in a grid, two rational coordinates and a denominator determine the position of
+ * a point in a grid.
  */
 typedef struct point {
-
+    
+    /* rational coordinates */
     long x, y;
 
-    long d; /* denominator */
-
+    /* denominator - should always be 1 here */
+    long d;
+    
 } point;
 
-/* A vertex that corresponds to a point in a graph. */
+/*
+ * A vertex that corresponds to a point that belongs to a graph
+ */
 typedef struct vertex {
 
-    long idx; /* points array index */
+     /* index in points array */
+    int idx;
 
+    /* number of edges that are incident to the vertex */
     int deg;
 
 } vertex;
 
 /*
- * An edge that connects to points of a graph.
- * Edges are stored in such a way that src < tgt
- * holds true.
+ * An edge that connects two vertices of a graph. Despite the fact that we use src and tgt as
+ * identifiers for the vertices that are incident to an edge, edges do not have a direction.
  */
 typedef struct edge {
 
-    long src;
-    long tgt;
+    /* vertices that are incident to the edge */
+    int src, tgt;
 
 } edge;
 
 /*
- * An undirected graph that consists of a a set of points/vertices
- * and a set of edges that interconnect these points.
+ * An undirected graph that consists of a set of points (vertices) and edges that connect
+ * these vertices.
  */
 typedef struct graph {
 
-    int refcount; /* for deallocation */
+    /* number of references to the graph - for deallocation */
+    int refcount;
 
+    /* the grid in which the graph is drawn - determines its coordinate offset */
+    enum grid grid;
+
+    /* array of points - remains the same throughout the game */
     point* points;
-    long* indices;
+    /* array of point indices - remains the same throughout the game */
+    int* indices;
+    /* 234-tree of point indices - maps the current game state */
     tree234* indices_234;
+
+    /* 234-tree of edges - maps the current game state */
     tree234* edges;
 
 } graph;
 
 struct game_params {
 
-    int n_base; /* number of base graph points */
-    int n_min; /* number of minor graph points */
+    /* number of base graph points */
+    int n_base;
+
+    /* number of minor graph points */
+    int n_min;
 
 };
 
 struct game_state {
 
     game_params params;
-
-    long width; /* why does untangle have this data item in state ? */
-    long height; /* why does untangle have this data item in state ? */
 
     graph* base;
     graph* minor;
@@ -509,19 +534,19 @@ static int vertcmp(void *av, void *bv)
     return vertcmpC(av, bv);
 }
 
-static int longcmpC(const void* av, const void* bv)
+static int intcmpC(const void* av, const void* bv)
 {
-    const long* a = (long*) av;
-    const long* b = (long*) bv;
+    const int* a = (int*) av;
+    const int* b = (int*) bv;
 
     if (*a < *b) return -1;
     else if (*a > *b) return 1;
     else return 0;
 }
 
-static int longcmp(void* av, void* bv)
+static int intcmp(void* av, void* bv)
 {
-    return longcmpC(av, bv);
+    return intcmpC(av, bv);
 }
 
 /*
@@ -550,7 +575,6 @@ static void addedges(tree234* edges, tree234* vertices, point* points, long* cnt
     int i;
     vertex* vxa = delpos234(vertices, 0);
     (*cnt)--;
-    /*printf("Creating edges from vertex %ld\n", vxa->idx);*/
 
     for (i = (*cnt) - 1; i >= 0;)
     {
@@ -558,12 +582,9 @@ static void addedges(tree234* edges, tree234* vertices, point* points, long* cnt
         int j;
         vertex* vxb = index234(vertices, i);
         edge* e;
-        /*printf("Creating edges to vertex %ld\n", vxb->idx);*/
 
         if (isedge(edges, vxa->idx, vxb->idx)) 
         {
-            /*printf("Found existing edge from vertex %ld to vertex %ld\n",
-                        vxa->idx, vxb->idx);*/
             i--;
             continue;
         }
@@ -578,8 +599,6 @@ static void addedges(tree234* edges, tree234* vertices, point* points, long* cnt
             else if (cross(points[vxa->idx], points[vxb->idx],
                             points[e->src], points[e->tgt]))
             {
-                /*printf("Found crossing between edges %ld-%ld and %ld-%ld\n",
-                            vxa->idx, vxb->idx, e->src, e->tgt);*/
                 crossing = true;
                 break;
             }
@@ -587,21 +606,15 @@ static void addedges(tree234* edges, tree234* vertices, point* points, long* cnt
 
         if (!crossing)
         {
-            /*printf("Add edge from vertex %ld to vertex %ld to the edges 234-tree\n",
-                        vxa->idx, vxb->idx);*/
             addedge(edges, vxa->idx, vxb->idx);
             del234(vertices, vxb);
             vxb->deg++;
             if (vxb->deg < MAXDEGREE)
             {
-                /*printf("Update vertex %ld in the vertices 234-tree\n",
-                            vxb->idx)*/
                 add234(vertices, vxb);
             }
             else
             {
-                /*printf("Delete vertex %ld in the vertices 234-tree\n",
-                            vxb->idx)*/
                 (*cnt)--;
                 i--;
             }
@@ -613,8 +626,6 @@ static void addedges(tree234* edges, tree234* vertices, point* points, long* cnt
             i--;
         }
     }
-
-    /*printf("Finished creating edges from vertex %ld\n", vxa->idx)*/
 }
 
 /* denominator must divide PREFFERED_TILESIZE, i.e. 64 */
@@ -632,6 +643,7 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     const int n_base = params->n_base;
     const int n_sub = n_base / n_min;
     int* sub_sizes;
+    int* sub_offsets;
 
     long i, j;
     long margin_min = 4 * COORDUNIT;
@@ -642,7 +654,6 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     long* coords_x;
     long* coords_y;
     long* radii;
-    long* sub_offsets;
 
     point* pt;
     point* pts_min;
@@ -667,13 +678,12 @@ static char *new_game_desc(const game_params *params, random_state *rs,
      */
     g_size = COORDLIMIT(n_base) * PREFERRED_TILESIZE;
     g_margin = COORDMARGIN(g_size);
-    /*printf("Set grid size: %ld and margin: %ld\n", g_size, g_margin)*/
 
     /*
      * Generate random coordinates for the points of the minor. The coordinates will
      * be in the range (g_margin + margin, g_size - g_margin - margin).
      */
-    size = g_size - (2 * (g_margin + margin_min));
+    size = g_size - (NGRIDS * (g_margin + margin_min));
     count = (size / COORDUNIT) + 1;
     coords_x = snewn(count, long);
     coords_y = snewn(count, long);
@@ -696,8 +706,6 @@ static char *new_game_desc(const game_params *params, random_state *rs,
         pt->x = coords_x[i];
         pt->y = coords_y[i];
         pt->d = 1;
-        /*printf("Assigned minor point %ld with coordinates x: %ld, y: %ld\n",
-                    i, pt->x, pt->y)*/
     }
     sfree(coords_x);
     sfree(coords_y);
@@ -720,7 +728,7 @@ static char *new_game_desc(const game_params *params, random_state *rs,
         vx->deg = 0;
         add234(vtcs_234, vx);
     }
-    count = n_min; /* number of minor vertices */
+    count = n_min;
     while (count >= 2)
     {
         addedges(edges_min_234, vtcs_234, pts_min, &count);
@@ -750,25 +758,15 @@ static char *new_game_desc(const game_params *params, random_state *rs,
         {
             point* ptb = pts_min + j;
             long dist = squarert(square(pt->x - ptb->x) + square(pt->y - ptb->y)) / 2;
-            if (dist < radii[i])
-            {
-                radii[i] = dist;
-                /*printf("Assigned new minimal distance %ld from minor point %ld to %ld\n",
-                        radii[i], i, j)*/
-            }
-            if (dist < radii[j])
-            {
-                radii[j] = dist;
-                /*printf("Assigned new minimal distance %ld from minor point %ld to %ld\n",
-                        radii[j], j, i)*/
-            }
+            if (dist < radii[i]) radii[i] = dist;
+            if (dist < radii[j]) radii[j] = dist;
         }
     }
 
     /* Allocare memory for the subgraphs that replace the points of the minor */
     subs = snewn(n_min, point*);
     sub_sizes = snewn(n_min, int);
-    sub_offsets = snewn(n_min + 1, long);
+    sub_offsets = snewn(n_min + 1, int);
 
     /*
      * Generate random coordinates for the points of our subgraphs. The points
@@ -780,7 +778,6 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     *sub_offsets = 0;
     for (i = 0; i < n_min; i++)
     {
-        /*printf("Creating subgraph that replaces minor point %ld\n", i)*/
         if (radii[i] < margin_min)
         {
             subs[i] = snew(point);
@@ -788,7 +785,6 @@ static char *new_game_desc(const game_params *params, random_state *rs,
             sub_offsets[i+1] = sub_offsets[i] + 1;
             sub = subs[i];
             *sub = pts_min[i];
-            /*printf("Copied minor point into subgraph %ld\n", i)*/
         }
         else
         {
@@ -809,12 +805,9 @@ static char *new_game_desc(const game_params *params, random_state *rs,
                 pt->x = pts_min[i].x + (r * sin(angles[j]));
                 pt->y = pts_min[i].y + (r * cos(angles[j]));
                 pt->d = 1;
-                /*printf("Created new subgraph point with coordinates x: %ld, y: %ld\n",
-                        pt->x, pt->y)*/
             }
             sfree(angles);
         }
-        /*printf("Finished creating subgraph %ld\n", i)*/
     }
     sfree(radii);
 
@@ -828,8 +821,6 @@ static char *new_game_desc(const game_params *params, random_state *rs,
         for (j = sub_offsets[i]; j < sub_offsets[i+1]; j++)
         {
             pts_base[j] = sub[j-sub_offsets[i]];
-            /*printf("Copied subgraph point %ld of subgraph %ld into base graph points at %ld\n",
-                        j - sub_offsets[i], i, j)*/
         }
     }
     for (i = 0; i < n_min; i++) sfree(subs[i]);
@@ -851,11 +842,9 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     }
     for (i = 0; (e = index234(edges_min_234, i)) != NULL; i++)
     {
-        long idxa = random_upto(rs, sub_sizes[e->src]) + sub_offsets[e->src];
-        long idxb = random_upto(rs, sub_sizes[e->tgt]) + sub_offsets[e->tgt];
+        int idxa = random_upto(rs, sub_sizes[e->src]) + sub_offsets[e->src];
+        int idxb = random_upto(rs, sub_sizes[e->tgt]) + sub_offsets[e->tgt];
         addedge(edges_base_234, idxa, idxb);
-        /*printf("Add edge from vertex %ld (s:%ld,p:%ld) to vertex %ld (s:%ld,p:%ld) to the base graph edges 234-tree\n",
-                    idxa, e->src, idxa - sub_offsets[e->src], idxb, e->tgt, idxb - sub_offsets[e->tgt])*/
         vtcs_base[idxa].deg++;
         vtcs_base[idxb].deg++;
     }
@@ -892,7 +881,7 @@ static char *new_game_desc(const game_params *params, random_state *rs,
      * Generate random coordinates for the remaining points. The coordinates
      * will be in the range (g_margin, g_size - g_margin).
      */
-    size = g_size - (2 * g_margin);
+    size = g_size - (NGRIDS * g_margin);
     count = (size / COORDUNIT) + 1;
     coords_x = snewn(count, long);
     coords_y = snewn(count, long);
@@ -913,8 +902,6 @@ static char *new_game_desc(const game_params *params, random_state *rs,
        pt->x = coords_x[i];
        pt->y = coords_y[i];
        pt->d = 1;
-       /*printf("Assigned remaining point %ld with coordinates x: %ld, y: %ld\n",
-                    i + sub_offsets[n_min], pt->x, pt->y)*/
     }
     sfree(coords_x);
     sfree(coords_y);
@@ -977,7 +964,7 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     for (i = 0; (e = index234(edges_min_234, i)) != NULL; i++)
     {
         edges_min[i] = *e;
-        len += (sprintf(buf, "%ld-%ld", e->src, e->tgt) + 1);
+        len += (sprintf(buf, "%d-%d", e->src, e->tgt) + 1);
     }
     for (i = 0; i < n_base; i++)
     {
@@ -987,7 +974,7 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     for (i = 0; (e = index234(edges_base_234, i)) != NULL; i++)
     {
         edges_base[i] = *e;
-        len += (sprintf(buf, "%ld-%ld", e->src, e->tgt) + 1);
+        len += (sprintf(buf, "%d-%d", e->src, e->tgt) + 1);
     }
 
     /*
@@ -1012,11 +999,11 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     for (i = 0; i < count_min - 1; i++)
     {
         e = edges_min + i;
-        off += sprintf(ret + off, "%ld-%ld%s",e->src, e->tgt, sep);
+        off += sprintf(ret + off, "%d-%d%s",e->src, e->tgt, sep);
     }
     sep = ";";
     e = edges_min + count_min - 1;
-    off += sprintf(ret + off, "%ld-%ld%s", e->src, e->tgt, sep);
+    off += sprintf(ret + off, "%d-%d%s", e->src, e->tgt, sep);
     sep = ",";
     for (i = 0; i < n_base - 1; i++)
     {
@@ -1030,13 +1017,11 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     for (i = 0; i < count_base - 1; i++)
     {
         e = edges_base + i;
-        off += sprintf(ret + off, "%ld-%ld%s", e->src, e->tgt, sep);
+        off += sprintf(ret + off, "%d-%d%s", e->src, e->tgt, sep);
     }
     sep = ";";
     e = edges_base + count_base - 1;
-    off += sprintf(ret + off, "%ld-%ld%s", e->src, e->tgt, sep);
-
-    /*printf("printf length: %d, precalculated length: %d\n", printf("%s\n", ret) - 1, len)*/
+    off += sprintf(ret + off, "%d-%d%s", e->src, e->tgt, sep);
 
     sfree(edges_min);
     sfree(edges_base);
@@ -1091,10 +1076,8 @@ static char *new_game_desc(const game_params *params, random_state *rs,
             off += sprintf(str + off, "%ld-%ld%s", j - sub_offsets[i], j, sep);
         }
         sep = ";";
-        off += sprintf(str + off, "%ld-%ld%s", (sub_offsets[i+1] - 1) - sub_offsets[i], sub_offsets[i+1] - 1, sep);
+        off += sprintf(str + off, "%d-%d%s", (sub_offsets[i+1] - 1) - sub_offsets[i], sub_offsets[i+1] - 1, sep);
     }
-
-    /*printf("printf length: %d, precalculated length: %d\n", printf("%s\n", str) - 1, len)*/
 
     *aux = str;
     }
@@ -1112,17 +1095,17 @@ static char *new_game_desc(const game_params *params, random_state *rs,
 }
 
 /*
- * Validate a graph description, i.e. a string that specifies a set of points
- * by their index and position and a set of edges between those points by the
- * point indices of their incident vertices.
+ * Validate a graph description, i.e. a string that specifies a set of points by their index and
+ * position and a set of edges between those points by the point indices of their incident vertices.
  */
 static const char* validate_graph(const char** desc, int n, long lim, long mar)
 {
-    long idx, x, y;
-    long src, tgt;
+    int idx;
+    int src, tgt;
+    long x, y;
     while (**desc)
     {
-        idx = atol(*desc);
+        idx = atoi(*desc);
         if(idx < 0 || idx >= n)
             return "Point index out of range in game description";
         while (**desc && isdigit((unsigned char) (**desc))) (*desc)++;
@@ -1151,7 +1134,7 @@ static const char* validate_graph(const char** desc, int n, long lim, long mar)
     }
     while (**desc)
     {
-        src = atol(*desc);
+        src = atoi(*desc);
         if (src < 0 || src >= n)
             return "Edge source index out of range in game description";
         while (**desc && isdigit((unsigned char) (**desc))) (*desc)++;
@@ -1160,7 +1143,7 @@ static const char* validate_graph(const char** desc, int n, long lim, long mar)
             return "Expected '-' after edge source index in game description";
         (*desc)++;
 
-        tgt = atol(*desc);
+        tgt = atoi(*desc);
         if (tgt < 0 || tgt >= n)
             return "Edge target index out of range in game description";
         while (**desc && isdigit((unsigned char) (**desc))) (*desc)++;
@@ -1189,26 +1172,26 @@ static const char *validate_desc(const game_params *params, const char *desc)
 }
 
 /*
- * Parse a graph description that has been validated by validate_graph.
- * The graph description consists of a set of point indexes and positions
- * and edge vertex indices.
+ * Parse a graph description that has been validated by validate_graph. The graph description consists
+ * of a description of a set of points (vertices) and a description of a set of edges.
  */
 static graph* parse_graph(const char** desc, int n, long lim, long mar)
 {
     graph* ret = snew(graph);
-    ret->refcount = 1;
     point* pt;
-    long* ix;
+    int idx;
+    int src, tgt;
+    int* ix;
+    long x, y;
+    ret->refcount = 1;
     ret->points = snewn(n, point);
-    ret->indices = snewn(n, long);
-    ret->indices_234 = newtree234(longcmp); /* let the tree sort the vertices by their indices */
+    ret->indices = snewn(n, int);
+    ret->indices_234 = newtree234(intcmp);
     ret->edges = newtree234(edgecmp);
-    long idx, x, y;
-    long src, tgt;
     do
     {
-        idx = atol(*desc);
-        /**/printf("%ld-", idx);/**/
+        idx = atoi(*desc);
+        /**/printf("%d-", idx);/**/
         assert(idx >= 0 && idx < n);
         while (**desc && isdigit((unsigned char) (**desc))) (*desc)++;
 
@@ -1242,16 +1225,16 @@ static graph* parse_graph(const char** desc, int n, long lim, long mar)
     while (*((*desc)++) != ';');
     do
     {
-        src = atol(*desc);
-        /**/printf("%ld-", src);/**/
+        src = atoi(*desc);
+        /**/printf("%d-", src);/**/
         assert(src >= 0 && src < n);
         while (**desc && isdigit((unsigned char) (**desc))) (*desc)++;
 
         assert(**desc == '-');
         (*desc)++;
 
-        tgt = atol(*desc);
-        /**/printf("%ld\n", tgt);/**/
+        tgt = atoi(*desc);
+        /**/printf("%d\n", tgt);/**/
         assert(tgt >= 0 && tgt < n);
         while (**desc && isdigit((unsigned char) (**desc))) (*desc)++;
 
@@ -1272,8 +1255,6 @@ static game_state *new_game(midend *me, const game_params *params,
     state->params = *params;
     long g_size = COORDLIMIT(params->n_base) * PREFERRED_TILESIZE;
     long g_margin = COORDMARGIN(g_size);
-    state->width = 2 * g_size;
-    state->height = g_size;
     state->minor = parse_graph(&_desc, params->n_min, g_size - g_margin, g_margin);
     state->base = parse_graph(&_desc, params->n_base, g_size - g_margin, g_margin);
     state->solved = false;
@@ -1286,8 +1267,6 @@ static game_state *dup_game(const game_state *state)
     game_state *ret = snew(game_state);
 
     ret->params = state->params;
-    ret->width = state->width;
-    ret->height = state->height;
     ret->minor = state->minor;
     ret->minor->refcount++;
     ret->base = state->base;
@@ -1298,9 +1277,8 @@ static game_state *dup_game(const game_state *state)
 }
 
 /*
- * Free the memory that points to a graph structure if its refcount is equal
- * to or smaller than 0, inlcudes freeing the point array and the vertex and
- * edge 234-trees.
+ * Free the memory that points to a graph structure if its refcount is equal to or smaller than 0,
+ * inlcudes freeing the point array and the vertex and edge 234-trees.
  */
 static void free_graph(graph* graph)
 {
@@ -1325,11 +1303,10 @@ static void free_game(game_state *state)
 }
 
 /*
-
- * Replace the given edge in the given edge 234-tree. The new edge will have new_src
- * and new_tgt as source and target respetively.
- 
-static void replace_edge(tree234* edges, edge* e, long new_src, long new_tgt)
+ * Replace the given edge in the given edge 234-tree. The new edge will have new_src and new_tgt 
+ * as source and target respetively.
+ */
+/**/static void replace_edge(tree234* edges, edge* e, int new_src, int new_tgt)
 {
     del234(edges, e);
 
@@ -1339,8 +1316,8 @@ static void replace_edge(tree234* edges, edge* e, long new_src, long new_tgt)
     }
     else
     {
-        long s = min(new_src, new_tgt);
-        long t = max(new_src, new_tgt);
+        int s = min(new_src, new_tgt);
+        int t = max(new_src, new_tgt);
         e->src = s;
         e->tgt = t;
         if (find234(edges, e, NULL) == NULL)
@@ -1348,16 +1325,17 @@ static void replace_edge(tree234* edges, edge* e, long new_src, long new_tgt)
         else
             sfree(e);
     }
-}
+}/**/
 
 
- * Contract an edge from our graph, i.e. merge its incident vertices in such a way
- * that no edges are lost except for the contracted edge itself.
- 
-static void contract_edge(graph* graph, long src, long tgt)
+/* 
+ * Contract an edge from our graph, i.e. merge its incident vertices in such a way that no edges
+ * are lost except for the contracted edge itself.
+ */
+/**/static void contract_edge(graph* graph, int src, int tgt)
 {
-    long i;
-    long s, t;
+    int i;
+    int s, t;
     edge* e;
 
     assert(src != tgt);
@@ -1365,10 +1343,6 @@ static void contract_edge(graph* graph, long src, long tgt)
 
     s = min(src, tgt);
     t = max(src, tgt);
-
-    
-     * Replace all edges from or to the edge target with edges from and to the edge
-     * source respectively.
      
     for (i = 0; (e = index234(graph->edges, i)) != NULL; i++)
     {
@@ -1382,10 +1356,8 @@ static void contract_edge(graph* graph, long src, long tgt)
         }
     }
 
-     Remove the edge target from our graph since it has been merged into the edge source 
     del234(graph->indices_234, graph->indices + t);
-}
-*/
+}/**/
 
 static char *solve_game(const game_state *state, const game_state *currstate,
                         const char *aux, const char **error)
@@ -1404,14 +1376,25 @@ static char *game_text_format(const game_state *state)
 }
 
 struct game_ui {
-    int mergept1, mergept2; /* indices of the points to merge */
-    long new_x, new_y; /* the new coordinates of the resulting point */
+
+    /* game window size */
+    long width, height;
+
+    /* indices of the points that should be merged */
+    int mergept1, mergept2;
+    /* the new coordinates of the resulting point */
+    long new_x, new_y;
+
     bool just_merged;
+
 };
 
 static game_ui *new_ui(const game_state *state)
 {
     game_ui* ret = snew(game_ui);
+    long g_size = COORDLIMIT(state->params.n_base) * PREFERRED_TILESIZE;
+    ret->width = NGRIDS * g_size;
+    ret->height = g_size;
     ret->mergept1 = -1;
     ret->mergept2 = -1;
     ret->new_x = -1;
@@ -1445,10 +1428,15 @@ static void game_changed_state(game_ui *ui, const game_state *oldstate,
 }
 
 struct game_drawstate {
+
     int tilesize;
+
+    /* indices of the points that should be merged */
     long mergept1, mergept2;
+
     graph* base;
     graph* minor;
+
 };
 
 static char *interpret_move(const game_state *state, game_ui *ui,
@@ -1471,7 +1459,7 @@ static void game_compute_size(const game_params *params, int tilesize,
                               int *x, int *y)
 {
     int g_size = COORDLIMIT(params->n_base) * tilesize;
-    *x = 2 * g_size;
+    *x = NGRIDS * g_size;
     *y = g_size;
 }
 
