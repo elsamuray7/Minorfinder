@@ -34,6 +34,12 @@
 
 enum {
     COL_BACKGROUND,
+    COL_BASEPOINT,
+    COL_MINORPOINT,
+    COL_MERGEPOINT,
+    COL_EDGE,
+    COL_CONTREDGE,
+    COL_FLASH,
     NCOLOURS
 };
 
@@ -79,6 +85,8 @@ typedef struct graph {
     int refcount; /* for deallocation */
 
     point* points;
+    long* indices;
+    tree234* indices_234;
     tree234* edges;
 
 } graph;
@@ -94,18 +102,14 @@ struct game_state {
 
     game_params params;
 
-    long width;
-    long height;
+    long width; /* why does untangle have this data item in state ? */
+    long height; /* why does untangle have this data item in state ? */
 
     graph* base;
     graph* minor;
 
     bool solved;
 
-};
-
-struct game_ui {
-    /* not implemented yet */
 };
 
 static game_params *default_params(void)
@@ -503,6 +507,21 @@ static int vertcmpC(const void *av, const void *bv)
 static int vertcmp(void *av, void *bv)
 {
     return vertcmpC(av, bv);
+}
+
+static int longcmpC(const void* av, const void* bv)
+{
+    const long* a = (long*) av;
+    const long* b = (long*) bv;
+
+    if (*a < *b) return -1;
+    else if (*a > *b) return 1;
+    else return 0;
+}
+
+static int longcmp(void* av, void* bv)
+{
+    return longcmpC(av, bv);
 }
 
 /*
@@ -1092,6 +1111,11 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     return ret;
 }
 
+/*
+ * Validate a graph description, i.e. a string that specifies a set of points
+ * by their index and position and a set of edges between those points by the
+ * point indices of their incident vertices.
+ */
 static const char* validate_graph(const char** desc, int n, long lim, long mar)
 {
     long idx, x, y;
@@ -1164,19 +1188,27 @@ static const char *validate_desc(const game_params *params, const char *desc)
     
 }
 
+/*
+ * Parse a graph description that has been validated by validate_graph.
+ * The graph description consists of a set of point indexes and positions
+ * and edge vertex indices.
+ */
 static graph* parse_graph(const char** desc, int n, long lim, long mar)
 {
-    graph* g = snew(graph);
-    g->refcount = 1;
+    graph* ret = snew(graph);
+    ret->refcount = 1;
     point* pt;
-    g->points = snewn(n, point);
-    g->edges = newtree234(edgecmp);
+    long* ix;
+    ret->points = snewn(n, point);
+    ret->indices = snewn(n, long);
+    ret->indices_234 = newtree234(longcmp); /* let the tree sort the vertices by their indices */
+    ret->edges = newtree234(edgecmp);
     long idx, x, y;
     long src, tgt;
     do
     {
         idx = atol(*desc);
-        printf("%ld-", idx);
+        /**/printf("%ld-", idx);/**/
         assert(idx >= 0 && idx < n);
         while (**desc && isdigit((unsigned char) (**desc))) (*desc)++;
 
@@ -1184,7 +1216,7 @@ static graph* parse_graph(const char** desc, int n, long lim, long mar)
         (*desc)++;
 
         x = atol(*desc);
-        printf("%ld-", x);
+        /**/printf("%ld-", x);/**/
         assert(x >= mar && x <= lim);
         while (**desc && isdigit((unsigned char) (**desc))) (*desc)++;
 
@@ -1192,14 +1224,18 @@ static graph* parse_graph(const char** desc, int n, long lim, long mar)
         (*desc)++;
 
         y = atol(*desc);
-        printf("%ld\n", y);
+        /**/printf("%ld\n", y);/**/
         assert(y >= mar && y <= lim);
         while (**desc && isdigit((unsigned char) (**desc))) (*desc)++;
 
-        pt = g->points + idx;
+        pt = ret->points + idx;
         pt->x = x;
         pt->y = y;
         pt->d = 1;
+
+        ix = ret->indices + idx;
+        *ix = idx;
+        add234(ret->indices_234, ix);
 
         assert(**desc == ',' || **desc == ';');
     }
@@ -1207,7 +1243,7 @@ static graph* parse_graph(const char** desc, int n, long lim, long mar)
     do
     {
         src = atol(*desc);
-        printf("%ld-", src);
+        /**/printf("%ld-", src);/**/
         assert(src >= 0 && src < n);
         while (**desc && isdigit((unsigned char) (**desc))) (*desc)++;
 
@@ -1215,17 +1251,17 @@ static graph* parse_graph(const char** desc, int n, long lim, long mar)
         (*desc)++;
 
         tgt = atol(*desc);
-        printf("%ld\n", tgt);
+        /**/printf("%ld\n", tgt);/**/
         assert(tgt >= 0 && tgt < n);
         while (**desc && isdigit((unsigned char) (**desc))) (*desc)++;
 
-        addedge(g->edges, src, tgt);
+        addedge(ret->edges, src, tgt);
 
         assert(**desc == ',' || **desc == ';');
     }
     while (*((*desc)++) != ';');
 
-    return g;
+    return ret;
 }
 
 static game_state *new_game(midend *me, const game_params *params,
@@ -1261,27 +1297,95 @@ static game_state *dup_game(const game_state *state)
     return ret;
 }
 
-static void free_game(game_state *state)
+/*
+ * Free the memory that points to a graph structure if its refcount is equal
+ * to or smaller than 0, inlcudes freeing the point array and the vertex and
+ * edge 234-trees.
+ */
+static void free_graph(graph* graph)
 {
     edge* e;
-    state->minor->refcount--;
-    state->base->refcount--;
-    if (state->minor->refcount <= 0)
+    graph->refcount--;
+    if (graph->refcount <= 0)
     {
-        sfree(state->minor->points);
-        while((e = delpos234(state->minor->edges, 0)) != NULL) sfree(e);
-        freetree234(state->minor->edges);
-        sfree(state->minor);
+        sfree(graph->points);
+        sfree(graph->indices);
+        freetree234(graph->indices_234);
+        while((e = delpos234(graph->edges, 0)) != NULL) sfree(e);
+        freetree234(graph->edges);
+        sfree(graph);
     }
-    if (state->base->refcount <= 0)
-    {
-        sfree(state->base->points);
-        while((e = delpos234(state->base->edges, 0)) != NULL) sfree(e);
-        freetree234(state->base->edges);
-        sfree(state->base);
-    }
+}
+
+static void free_game(game_state *state)
+{
+    free_graph(state->minor);
+    free_graph(state->base);
     sfree(state);
 }
+
+/*
+
+ * Replace the given edge in the given edge 234-tree. The new edge will have new_src
+ * and new_tgt as source and target respetively.
+ 
+static void replace_edge(tree234* edges, edge* e, long new_src, long new_tgt)
+{
+    del234(edges, e);
+
+    if (new_src == new_tgt)
+    {
+        sfree(e);
+    }
+    else
+    {
+        long s = min(new_src, new_tgt);
+        long t = max(new_src, new_tgt);
+        e->src = s;
+        e->tgt = t;
+        if (find234(edges, e, NULL) == NULL)
+            add234(edges, e);
+        else
+            sfree(e);
+    }
+}
+
+
+ * Contract an edge from our graph, i.e. merge its incident vertices in such a way
+ * that no edges are lost except for the contracted edge itself.
+ 
+static void contract_edge(graph* graph, long src, long tgt)
+{
+    long i;
+    long s, t;
+    edge* e;
+
+    assert(src != tgt);
+    assert(isedge(graph->edges, src, tgt));
+
+    s = min(src, tgt);
+    t = max(src, tgt);
+
+    
+     * Replace all edges from or to the edge target with edges from and to the edge
+     * source respectively.
+     
+    for (i = 0; (e = index234(graph->edges, i)) != NULL; i++)
+    {
+        if (t == e->src)
+        {
+            replace_edge(graph->edges, e, s, e->tgt);
+        }
+        else if (t == e->tgt)
+        {
+            replace_edge(graph->edges, e, e->src, s);
+        }
+    }
+
+     Remove the edge target from our graph since it has been merged into the edge source 
+    del234(graph->indices_234, graph->indices + t);
+}
+*/
 
 static char *solve_game(const game_state *state, const game_state *currstate,
                         const char *aux, const char **error)
@@ -1299,13 +1403,27 @@ static char *game_text_format(const game_state *state)
     return NULL;
 }
 
+struct game_ui {
+    int mergept1, mergept2; /* indices of the points to merge */
+    long new_x, new_y; /* the new coordinates of the resulting point */
+    bool just_merged;
+};
+
 static game_ui *new_ui(const game_state *state)
 {
-    return NULL;
+    game_ui* ret = snew(game_ui);
+    ret->mergept1 = -1;
+    ret->mergept2 = -1;
+    ret->new_x = -1;
+    ret->new_y = -1;
+    ret->just_merged = false;
+
+    return ret;
 }
 
 static void free_ui(game_ui *ui)
 {
+    sfree(ui);
 }
 
 static char *encode_ui(const game_ui *ui)
@@ -1320,11 +1438,17 @@ static void decode_ui(game_ui *ui, const char *encoding)
 static void game_changed_state(game_ui *ui, const game_state *oldstate,
                                const game_state *newstate)
 {
+    ui->mergept1 = -1;
+    ui->mergept2 = -1;
+    ui->new_x = -1;
+    ui->new_y = -1;
 }
 
 struct game_drawstate {
     int tilesize;
-    int FIXME;
+    long mergept1, mergept2;
+    graph* base;
+    graph* minor;
 };
 
 static char *interpret_move(const game_state *state, game_ui *ui,
@@ -1363,6 +1487,36 @@ static float *game_colours(frontend *fe, int *ncolours)
 
     frontend_default_colour(fe, &ret[COL_BACKGROUND * 3]);
 
+    /* blue */
+    ret[(COL_BASEPOINT * 3) + 0] = 0.0F;
+    ret[(COL_BASEPOINT * 3) + 1] = 0.0F;
+    ret[(COL_BASEPOINT * 3) + 2] = 1.0F;
+
+    /* red */
+    ret[(COL_MINORPOINT * 3) + 0] = 0.0F;
+    ret[(COL_MINORPOINT * 3) + 1] = 0.0F;
+    ret[(COL_MINORPOINT * 3) + 2] = 1.0F;
+
+    /* yellow */
+    ret[(COL_MERGEPOINT * 3) + 0] = 1.0F;
+    ret[(COL_MERGEPOINT * 3) + 1] = 0.8F;
+    ret[(COL_MERGEPOINT * 3) + 2] = 0.0F;
+
+    /* black */
+    ret[(COL_EDGE * 3) + 0] = 0.0F;
+    ret[(COL_EDGE * 3) + 1] = 0.0F;
+    ret[(COL_EDGE * 3) + 2] = 0.0F;
+
+    /* grey */
+    ret[(COL_CONTREDGE * 3) + 0] = 0.5F;
+    ret[(COL_CONTREDGE * 3) + 1] = 0.5F;
+    ret[(COL_CONTREDGE * 3) + 2] = 0.5F;
+
+    /* white */
+    ret[(COL_FLASH * 3) + 0] = 1.0F;
+    ret[(COL_FLASH * 3) + 1] = 1.0F;
+    ret[(COL_FLASH * 3) + 2] = 1.0F;
+
     *ncolours = NCOLOURS;
     return ret;
 }
@@ -1372,13 +1526,20 @@ static game_drawstate *game_new_drawstate(drawing *dr, const game_state *state)
     struct game_drawstate *ds = snew(struct game_drawstate);
 
     ds->tilesize = PREFERRED_TILESIZE;
-    ds->FIXME = 0;
+    ds->mergept1 = -1;
+    ds->mergept2 = -1;
+    ds->base = state->base;
+    state->base->refcount++;
+    ds->minor = state->minor;
+    state->minor->refcount++;
 
     return ds;
 }
 
 static void game_free_drawstate(drawing *dr, game_drawstate *ds)
 {
+    free_graph(ds->minor);
+    free_graph(ds->base);
     sfree(ds);
 }
 
@@ -1433,19 +1594,19 @@ static void game_print(drawing *dr, const game_state *state, int tilesize)
 
 const struct game thegame = {
     "Minor Finder", "games.minorfinder", "minorfinder",
-    default_params,
-    game_fetch_preset, NULL,
-    decode_params,
-    encode_params,
-    free_params,
-    dup_params,
+    default_params, /* done */
+    game_fetch_preset, NULL, /* done */
+    decode_params, /* done */
+    encode_params, /* done */
+    free_params, /* done */
+    dup_params, /* done */
     false, game_configure, custom_params,
-    validate_params,
-    new_game_desc,
-    validate_desc,
-    new_game,
-    dup_game,
-    free_game,
+    validate_params, /* done */
+    new_game_desc, /* done */
+    validate_desc, /* done */
+    new_game, /* done */
+    dup_game, /* done */
+    free_game, /* done */
     false, solve_game,
     false, game_can_format_as_text_now, game_text_format,
     new_ui,
