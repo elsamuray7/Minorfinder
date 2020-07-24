@@ -116,6 +116,19 @@ typedef struct graph {
 
 } graph;
 
+/*
+ * A wrapper for the subgraph offsets
+ */
+typedef struct sub_offsets {
+
+    /* number of references to the subgraph offsets - for deallocation */
+    int refcount;
+    
+    /* array of subgraph offsets - remains the same throughout the game */
+    int* offsets;
+
+} sub_offsets;
+
 struct game_params {
 
     /* number of base graph points */
@@ -132,6 +145,8 @@ struct game_state {
 
     graph* base;
     graph* minor;
+
+    sub_offsets* soffs;
 
     bool solved;
 
@@ -948,13 +963,21 @@ static char *new_game_desc(const game_params *params, random_state *rs,
      * (1) point: <index> - <x coordinate> - <y coordinate>
      * (2) edge: <source index> - <target index>
      * 
-     * There we have our game description, a concatenation of encoded point and edge
-     * data. We have four collections of either points or edges that go into our
-     * description. The first two sets belong to the minor, the last two belong to
-     * the base graph. Single points and edges are separated by commas whereas sets
-     * are separated by semicolons:
+     * Furthermore the game description contain information about the subgraph offsets.
+     * This information is required to determine whether the player has solved the game
+     * or not. The subgraph offsets are encoded like this:
      * 
-     * (1),(1),...;(2),(2),...;(1),(1),...;(2),(2),...
+     * (3) <subgraph index> - <subgraph offset>
+     * 
+     * There we have our game description, a concatenation of encoded point and edge
+     * data followed by an encoding of the subgraph offsets. We have four collections
+     * of either points or edges that go into our description. The first two sets
+     * belong to the minor, the latter two belong to the base graph. These four sets
+     * are followed by a collection of subgraph offsets. Single points, edges and
+     * subgraph offsets are separated by commas whereas whole sets are separated by
+     * semicolons:
+     * 
+     * (1),(1),...;(2),(2),...;(1),(1),...;(2),(2),...;(3),(3),...;
      */
     for (i = 0; i < n_min; i++)
     {
@@ -975,6 +998,10 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     {
         edges_base[i] = *e;
         len += (sprintf(buf, "%d-%d", e->src, e->tgt) + 1);
+    }
+    for (i = 0; i <= n_min; i++)
+    {
+        len += (sprintf(buf, "%ld-%d", i, sub_offsets[i]) + 1);
     }
 
     /*
@@ -1022,65 +1049,20 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     sep = ";";
     e = edges_base + count_base - 1;
     off += sprintf(ret + off, "%d-%d%s", e->src, e->tgt, sep);
+    sep = ",";
+    for (i = 0; i < n_min; i++)
+    {
+        off += sprintf(ret + off, "%ld-%d%s", i, sub_offsets[i], sep);
+    }
+    sep = ";";
+    sprintf(ret + off, "%ld-%d%s", i, sub_offsets[n_min], sep);
 
     sfree(edges_min);
     sfree(edges_base);
     }
 
-    /*
-     * Last but not least we have to fill our aux string with some useful
-     * information that will help us to solve the game, i.e. information
-     * about the subgraphs that replaced the minor points in our base graph.
-     */
+    /* The aux string is not required anymore. Therefore it is set to NULL. */
     *aux = NULL;
-    {
-    const char* sep;
-    char* str;
-    char buf[80];
-    int len = 0;
-    int off = 0;
-
-    /*
-     * Calculate the length of our aux string. It will contain a sequence
-     * of encoded subgraph points. The subgraph points are separated by
-     * commas and the subgraphs themselves are separated by semicolons.
-     * The encoded string looks like this:
-     * 
-     * <subgraph index> : <index in subgraph> - <index in base points> , ... ; ...
-     */
-    for (i = 0; i < n_min; i++)
-    {
-        len += (sprintf(buf, "%ld", i) + 1);
-        for (j = sub_offsets[i]; j < sub_offsets[i+1]; j++)
-        {
-            len += (sprintf(buf, "%ld-%ld", j - sub_offsets[i], j) + 1);
-        }
-    }
-
-    /*
-     * Allocate memory for len+1 chars, that is exactly the length of our aux
-     * string including a trailing '\0'.
-     */
-    str = snewn(++len, char);
-
-    /*
-     * Now encode the subgraph data and write it into the allocated aux string.
-     */
-    for (i = 0; i < n_min; i++)
-    {
-        sep = ":";
-        off += sprintf(str + off, "%ld%s", i, sep);
-        sep = ",";
-        for (j = sub_offsets[i]; j < sub_offsets[i+1] - 1; j++)
-        {
-            off += sprintf(str + off, "%ld-%ld%s", j - sub_offsets[i], j, sep);
-        }
-        sep = ";";
-        off += sprintf(str + off, "%d-%d%s", (sub_offsets[i+1] - 1) - sub_offsets[i], sub_offsets[i+1] - 1, sep);
-    }
-
-    *aux = str;
-    }
 
     sfree(pts_min);
     sfree(pts_base);
@@ -1156,6 +1138,37 @@ static const char* validate_graph(const char** desc, int n, long lim, long mar)
     return NULL;
 }
 
+/*
+ * Validate a subgraph offset description, i.e. a string that specifies which points belong to which
+ * subgraph of our base graph.
+ */
+static const char* validate_sub_offsets(const char** desc, int n_base, int n_min)
+{
+    int idx, off;
+    while (**desc)
+    {
+        idx = atoi(*desc);
+        if (idx < 0 || idx > n_min)
+            return "Subgraph index out of range in game description";
+        while (**desc && isdigit((unsigned char) (**desc))) (*desc)++;
+
+        if (**desc != '-')
+            return "Expected '-' after subgraph index in game description";
+        (*desc)++;
+        
+        off = atoi(*desc);
+        if (off < 0 || off > n_base)
+            return "Subgraph offset out of range in game description";
+        while (**desc && isdigit((unsigned char) (**desc))) (*desc)++;
+
+        if (**desc != ',' && **desc != ';')
+            return "Expected ',' or ';' after edge target in game description";
+        if (*((*desc)++) == ';') break;
+    }
+
+    return NULL;
+}
+
 static const char *validate_desc(const game_params *params, const char *desc)
 {
     const char* _desc = desc; /* pointer copy */
@@ -1166,23 +1179,24 @@ static const char *validate_desc(const game_params *params, const char *desc)
         return err;
     else if ((err = validate_graph(&_desc, params->n_base, g_size - g_margin, g_margin)) != NULL)
         return err;
+    else if ((err = validate_sub_offsets(&_desc, params->n_base, params->n_min)) != NULL)
+        return err;
     else
         return NULL;
     
 }
 
 /*
- * Parse a graph description that has been validated by validate_graph. The graph description consists
- * of a description of a set of points (vertices) and a description of a set of edges.
+ * Parse a graph description that has been validated by validate_graph
  */
 static graph* parse_graph(const char** desc, int n, long lim, long mar)
 {
-    graph* ret = snew(graph);
-    point* pt;
     int idx;
     int src, tgt;
     int* ix;
     long x, y;
+    point* pt;
+    graph* ret = snew(graph);
     ret->refcount = 1;
     ret->points = snewn(n, point);
     ret->indices = snewn(n, int);
@@ -1247,6 +1261,39 @@ static graph* parse_graph(const char** desc, int n, long lim, long mar)
     return ret;
 }
 
+/*
+ * Parse a subgraph offset description that has been validated by validate_sub_offsets
+ */
+static sub_offsets* parse_sub_offsets(const char** desc, int n_base, int n_min)
+{
+    int idx, off;
+    int* soff;
+    sub_offsets* ret = snew(sub_offsets);
+    ret->refcount = 1;
+    ret->offsets = snewn(n_min + 1, int);
+    do
+    {
+        idx = atoi(*desc);
+        /**/printf("%d-", idx);/**/
+        assert(idx >= 0 || idx <= n_min);
+        while (**desc && isdigit((unsigned char) (**desc))) (*desc)++;
+
+        assert(**desc == '-');
+        (*desc)++;
+
+        off = atoi(*desc);
+        /**/printf("%d\n", off);/**/
+        assert(off >= 0 || off <= n_base);
+        while (**desc && isdigit((unsigned char) (**desc))) (*desc)++;
+
+        soff = ret->offsets + idx;
+        *soff = off;
+    }
+    while (*((*desc)++) != ';');
+    
+    return ret;
+}
+
 static game_state *new_game(midend *me, const game_params *params,
                             const char *desc)
 {
@@ -1257,6 +1304,7 @@ static game_state *new_game(midend *me, const game_params *params,
     long g_margin = COORDMARGIN(g_size);
     state->minor = parse_graph(&_desc, params->n_min, g_size - g_margin, g_margin);
     state->base = parse_graph(&_desc, params->n_base, g_size - g_margin, g_margin);
+    state->soffs = parse_sub_offsets(&_desc, params->n_base, params->n_min);
     state->solved = false;
 
     return state;
@@ -1271,6 +1319,8 @@ static game_state *dup_game(const game_state *state)
     ret->minor->refcount++;
     ret->base = state->base;
     ret->base->refcount++;
+    ret->soffs = state->soffs;
+    ret->soffs->refcount++;
     ret->solved = state->solved;
 
     return ret;
@@ -1297,8 +1347,14 @@ static void free_graph(graph* graph)
 
 static void free_game(game_state *state)
 {
-    free_graph(state->minor);
     free_graph(state->base);
+    free_graph(state->minor);
+    state->soffs->refcount--;
+    if (state->soffs->refcount <= 0)
+    {
+        sfree(state->soffs->offsets);
+        sfree(state->soffs);
+    }
     sfree(state);
 }
 
@@ -1306,7 +1362,7 @@ static void free_game(game_state *state)
  * Replace the given edge in the given edge 234-tree. The new edge will have new_src and new_tgt 
  * as source and target respetively.
  */
-/**/static void replace_edge(tree234* edges, edge* e, int new_src, int new_tgt)
+/*static void replace_edge(tree234* edges, edge* e, int new_src, int new_tgt)
 {
     del234(edges, e);
 
@@ -1325,14 +1381,14 @@ static void free_game(game_state *state)
         else
             sfree(e);
     }
-}/**/
+}*/
 
 
 /* 
  * Contract an edge from our graph, i.e. merge its incident vertices in such a way that no edges
  * are lost except for the contracted edge itself.
  */
-/**/static void contract_edge(graph* graph, int src, int tgt)
+/*static void contract_edge(graph* graph, int src, int tgt)
 {
     int i;
     int s, t;
@@ -1357,7 +1413,7 @@ static void free_game(game_state *state)
     }
 
     del234(graph->indices_234, graph->indices + t);
-}/**/
+}*/
 
 static char *solve_game(const game_state *state, const game_state *currstate,
                         const char *aux, const char **error)
@@ -1582,33 +1638,33 @@ static void game_print(drawing *dr, const game_state *state, int tilesize)
 
 const struct game thegame = {
     "Minor Finder", "games.minorfinder", "minorfinder",
-    default_params, /* done */
-    game_fetch_preset, NULL, /* done */
-    decode_params, /* done */
-    encode_params, /* done */
-    free_params, /* done */
-    dup_params, /* done */
+    default_params,                                                     /* done */
+    game_fetch_preset, NULL,                                            /* done */
+    decode_params,                                                      /* done */
+    encode_params,                                                      /* done */
+    free_params,                                                        /* done */
+    dup_params,                                                         /* done */
     false, game_configure, custom_params,
-    validate_params, /* done */
-    new_game_desc, /* done */
-    validate_desc, /* done */
-    new_game, /* done */
-    dup_game, /* done */
-    free_game, /* done */
+    validate_params,                                                    /* done */
+    new_game_desc,                                                      /* done */
+    validate_desc,                                                      /* done */
+    new_game,                                                           /* done */
+    dup_game,                                                           /* done */
+    free_game,                                                          /* done */
     false, solve_game,
     false, game_can_format_as_text_now, game_text_format,
-    new_ui,
-    free_ui,
+    new_ui,                                                             /* done */
+    free_ui,                                                            /* done */
     encode_ui,
     decode_ui,
     NULL, /* game_request_keys */
     game_changed_state,
     interpret_move,
     execute_move,
-    PREFERRED_TILESIZE, game_compute_size, game_set_size,
-    game_colours,
-    game_new_drawstate,
-    game_free_drawstate,
+    PREFERRED_TILESIZE, game_compute_size, game_set_size,               /* done */
+    game_colours,                                                       /* done */
+    game_new_drawstate,                                                 /* done */
+    game_free_drawstate,                                                /* done */
     game_redraw,
     game_anim_length,
     game_flash_length,
