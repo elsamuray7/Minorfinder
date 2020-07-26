@@ -101,6 +101,9 @@ typedef struct graph {
     /* number of references to the graph - for deallocation */
     int refcount;
 
+    /* number of copies of the graph - for deallocation */
+    int* cpycount;
+
     /* the grid in which the graph is drawn - determines its coordinate offset */
     enum grid grid;
 
@@ -1198,6 +1201,8 @@ static graph* parse_graph(const char** desc, enum grid grid, int n, long lim, lo
     point* pt;
     graph* ret = snew(graph);
     ret->refcount = 1;
+    ret->cpycount = snew(int);
+    *ret->cpycount = 1;
     ret->grid = grid;
     ret->points = snewn(n, point);
     ret->idcs = snewn(n, int);
@@ -1311,15 +1316,43 @@ static game_state *new_game(midend *me, const game_params *params,
     return state;
 }
 
+/*
+ * Duplicate a graph structure. Set its refcount to 1 and increment its copycount.
+ */
+static graph* dup_graph(const graph* gr)
+{
+    int i;
+    int* ix;
+    edge* e;
+    edge* ecpy;
+    graph* ret = snew(graph);
+
+    ret->refcount = 1;
+    ret->cpycount = gr->cpycount;
+    (*ret->cpycount)++;
+    ret->grid = gr->grid;
+    ret->points = gr->points;
+    ret->idcs = gr->idcs;
+    ret->indices = newtree234(intcmp);
+    for (i = 0; (ix = index234(gr->indices, i)) != NULL; i++) add234(ret->indices, ix);
+    ret->edges = newtree234(edgecmp);
+    for (i = 0; (e = index234(gr->edges, i)) != NULL; i++)
+    {
+        ecpy = snew(edge);
+        *ecpy = *e;
+        add234(ret->edges, ecpy);
+    }
+
+    return ret;
+}
+
 static game_state *dup_game(const game_state *state)
 {
     game_state *ret = snew(game_state);
 
     ret->params = state->params;
-    ret->minor = state->minor;
-    ret->minor->refcount++;
-    ret->base = state->base;
-    ret->base->refcount++;
+    ret->minor = dup_graph(state->minor);
+    ret->base = dup_graph(state->base);
     ret->soffs = state->soffs;
     ret->soffs->refcount++;
     ret->solved = state->solved;
@@ -1331,25 +1364,30 @@ static game_state *dup_game(const game_state *state)
  * Free the memory that points to a graph structure if its refcount is equal to or smaller than 0,
  * inlcudes freeing the point array and the vertex and edge 234-trees.
  */
-static void free_graph(graph* graph)
+static void free_graph(graph* gr, bool iscpy)
 {
     edge* e;
-    graph->refcount--;
-    if (graph->refcount <= 0)
+    if (iscpy) (*gr->cpycount)--;
+    (gr->refcount)--;
+    if (gr->refcount <= 0)
     {
-        sfree(graph->points);
-        sfree(graph->idcs);
-        freetree234(graph->indices);
-        while((e = delpos234(graph->edges, 0)) != NULL) sfree(e);
-        freetree234(graph->edges);
-        sfree(graph);
+        if (*gr->cpycount <= 0)
+        {
+            sfree(gr->cpycount);
+            sfree(gr->points);
+            sfree(gr->idcs);
+        }
+        freetree234(gr->indices);
+        while((e = delpos234(gr->edges, 0)) != NULL) sfree(e);
+        freetree234(gr->edges);
+        sfree(gr);
     }
 }
 
 static void free_game(game_state *state)
 {
-    free_graph(state->base);
-    free_graph(state->minor);
+    free_graph(state->base, true);
+    free_graph(state->minor, true);
     state->soffs->refcount--;
     if (state->soffs->refcount <= 0)
     {
@@ -1437,10 +1475,10 @@ struct game_ui {
     /* game window size */
     long width, height;
 
-    /* indices of the points that should be merged */
-    int mergept1, mergept2;
-    /* the new coordinates of the resulting point */
-    long new_x, new_y;
+    /* index of the resulting point of the points merge - the dominant point */
+    int mergept_dom;
+    /* index of the recessive point */
+    int mergept_rec;
 
     bool just_merged;
 
@@ -1452,10 +1490,8 @@ static game_ui *new_ui(const game_state *state)
     long g_size = COORDLIMIT(state->params.n_base) * PREFERRED_TILESIZE;
     ret->width = NGRIDS * g_size;
     ret->height = g_size;
-    ret->mergept1 = -1;
-    ret->mergept2 = -1;
-    ret->new_x = -1;
-    ret->new_y = -1;
+    ret->mergept_dom = -1;
+    ret->mergept_rec = -1;
     ret->just_merged = false;
 
     return ret;
@@ -1478,10 +1514,8 @@ static void decode_ui(game_ui *ui, const char *encoding)
 static void game_changed_state(game_ui *ui, const game_state *oldstate,
                                const game_state *newstate)
 {
-    ui->mergept1 = -1;
-    ui->mergept2 = -1;
-    ui->new_x = -1;
-    ui->new_y = -1;
+    ui->mergept_dom = -1;
+    ui->mergept_rec = -1;
 }
 
 struct game_drawstate {
@@ -1574,17 +1608,17 @@ static game_drawstate *game_new_drawstate(drawing *dr, const game_state *state)
     ds->mergept1 = -1;
     ds->mergept2 = -1;
     ds->base = state->base;
-    state->base->refcount++;
+    (ds->base->refcount)++;
     ds->minor = state->minor;
-    state->minor->refcount++;
+    (ds->minor->refcount)++;
 
     return ds;
 }
 
 static void game_free_drawstate(drawing *dr, game_drawstate *ds)
 {
-    free_graph(ds->minor);
-    free_graph(ds->base);
+    free_graph(ds->minor, false);
+    free_graph(ds->base, false);
     sfree(ds);
 }
 
