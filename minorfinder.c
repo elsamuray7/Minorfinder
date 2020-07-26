@@ -107,9 +107,9 @@ typedef struct graph {
     /* array of points - remains the same throughout the game */
     point* points;
     /* array of point indices - remains the same throughout the game */
-    int* indices;
+    int* idcs;
     /* 234-tree of point indices - maps the current game state */
-    tree234* indices_234;
+    tree234* indices;
 
     /* 234-tree of edges - maps the current game state */
     tree234* edges;
@@ -1189,7 +1189,7 @@ static const char *validate_desc(const game_params *params, const char *desc)
 /*
  * Parse a graph description that has been validated by validate_graph
  */
-static graph* parse_graph(const char** desc, int n, long lim, long mar)
+static graph* parse_graph(const char** desc, enum grid grid, int n, long lim, long mar)
 {
     int idx;
     int src, tgt;
@@ -1198,9 +1198,10 @@ static graph* parse_graph(const char** desc, int n, long lim, long mar)
     point* pt;
     graph* ret = snew(graph);
     ret->refcount = 1;
+    ret->grid = grid;
     ret->points = snewn(n, point);
-    ret->indices = snewn(n, int);
-    ret->indices_234 = newtree234(intcmp);
+    ret->idcs = snewn(n, int);
+    ret->indices = newtree234(intcmp);
     ret->edges = newtree234(edgecmp);
     do
     {
@@ -1230,9 +1231,9 @@ static graph* parse_graph(const char** desc, int n, long lim, long mar)
         pt->y = y;
         pt->d = 1;
 
-        ix = ret->indices + idx;
+        ix = ret->idcs + idx;
         *ix = idx;
-        add234(ret->indices_234, ix);
+        add234(ret->indices, ix);
 
         assert(**desc == ',' || **desc == ';');
     }
@@ -1302,8 +1303,8 @@ static game_state *new_game(midend *me, const game_params *params,
     state->params = *params;
     long g_size = COORDLIMIT(params->n_base) * PREFERRED_TILESIZE;
     long g_margin = COORDMARGIN(g_size);
-    state->minor = parse_graph(&_desc, params->n_min, g_size - g_margin, g_margin);
-    state->base = parse_graph(&_desc, params->n_base, g_size - g_margin, g_margin);
+    state->minor = parse_graph(&_desc, GRID_LEFT, params->n_min, g_size - g_margin, g_margin);
+    state->base = parse_graph(&_desc, GRID_RIGHT, params->n_base, g_size - g_margin, g_margin);
     state->soffs = parse_sub_offsets(&_desc, params->n_base, params->n_min);
     state->solved = false;
 
@@ -1337,8 +1338,8 @@ static void free_graph(graph* graph)
     if (graph->refcount <= 0)
     {
         sfree(graph->points);
-        sfree(graph->indices);
-        freetree234(graph->indices_234);
+        sfree(graph->idcs);
+        freetree234(graph->indices);
         while((e = delpos234(graph->edges, 0)) != NULL) sfree(e);
         freetree234(graph->edges);
         sfree(graph);
