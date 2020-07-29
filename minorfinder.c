@@ -151,7 +151,10 @@ struct game_state {
 
     sub_offsets* soffs;
 
+    /* player solved game */
     bool solved;
+    /* player used solve function */
+    bool cheated;
 
 };
 
@@ -1311,7 +1314,9 @@ static game_state *new_game(midend *me, const game_params *params,
     state->minor = parse_graph(&_desc, GRID_LEFT, params->n_min, g_size - g_margin, g_margin);
     state->base = parse_graph(&_desc, GRID_RIGHT, params->n_base, g_size - g_margin, g_margin);
     state->soffs = parse_sub_offsets(&_desc, params->n_base, params->n_min);
+    /**/printf("----------\n");/**/
     state->solved = false;
+    state->cheated = false;
 
     return state;
 }
@@ -1356,6 +1361,7 @@ static game_state *dup_game(const game_state *state)
     ret->soffs = state->soffs;
     ret->soffs->refcount++;
     ret->solved = state->solved;
+    ret->cheated = state->cheated;
 
     return ret;
 }
@@ -1442,16 +1448,12 @@ static void free_game(game_state *state)
     for (i = 0; (e = index234(graph->edges, i)) != NULL; i++)
     {
         if (t == e->src)
-        {
             replace_edge(graph->edges, e, s, e->tgt);
-        }
         else if (t == e->tgt)
-        {
             replace_edge(graph->edges, e, e->src, s);
-        }
     }
 
-    del234(graph->indices_234, graph->indices + t);
+    del234(graph->indices, graph->idcs + t);
 }*/
 
 static char *solve_game(const game_state *state, const game_state *currstate,
@@ -1521,9 +1523,6 @@ static void game_changed_state(game_ui *ui, const game_state *oldstate,
 struct game_drawstate {
 
     int tilesize;
-
-    /* indices of the points that should be merged */
-    long mergept1, mergept2;
 
     graph* base;
     graph* minor;
@@ -1605,8 +1604,6 @@ static game_drawstate *game_new_drawstate(drawing *dr, const game_state *state)
     struct game_drawstate *ds = snew(struct game_drawstate);
 
     ds->tilesize = PREFERRED_TILESIZE;
-    ds->mergept1 = -1;
-    ds->mergept2 = -1;
     ds->base = state->base;
     (ds->base->refcount)++;
     ds->minor = state->minor;
@@ -1622,31 +1619,80 @@ static void game_free_drawstate(drawing *dr, game_drawstate *ds)
     sfree(ds);
 }
 
+#define POINTRADIUS 5
+
 static void game_redraw(drawing *dr, game_drawstate *ds,
                         const game_state *oldstate, const game_state *state,
                         int dir, const game_ui *ui,
                         float animtime, float flashtime)
 {
+    int i;
+    int idx;
+    long g_size;
+    long x_off;
+    edge* e;
+    point* esrc;
+    point* etgt;
+    point* pts;
+
+    g_size = COORDLIMIT(state->params.n_base) * PREFERRED_TILESIZE;
+    
     /*
      * The initial contents of the window are not guaranteed and
      * can vary with front ends. To be on the safe side, all games
      * should start by drawing a big background-colour rectangle
      * covering the whole window.
      */
-    draw_rect(dr, 0, 0, 10*ds->tilesize, 10*ds->tilesize, COL_BACKGROUND);
-    draw_update(dr, 0, 0, 10*ds->tilesize, 10*ds->tilesize);
+    draw_rect(dr, 0, 0, ui->width, ui->height, COL_BACKGROUND);
+
+    pts = ds->base->points;
+    x_off = ds->base->grid * g_size;
+    for (i = 0; (e = index234(ds->base->edges, i)) != NULL; i++)
+    {
+        esrc = pts + e->src;
+        etgt = pts + e->tgt;
+        draw_line(dr, esrc->x + x_off, esrc->y, etgt->x + x_off, etgt->y, COL_EDGE);
+    }
+    for (i = 0; index234(ds->base->indices, i) != NULL; i++)
+    {
+        idx = *((int*) index234(ds->base->indices, i));
+        draw_circle(dr, pts[idx].x + x_off, pts[idx].y, POINTRADIUS,
+                    COL_BASEPOINT, COL_BASEPOINT);
+    }
+
+    pts = ds->minor->points;
+    x_off = ds->minor->grid * g_size;
+    for (i = 0; (e = index234(ds->minor->edges, i)) != NULL; i++)
+    {
+        esrc = pts + e->src;
+        etgt = pts + e->tgt;
+        draw_line(dr, esrc->x + x_off, esrc->y, etgt->x + x_off, etgt->y, COL_EDGE);
+    }
+    for (i = 0; index234(ds->minor->indices, i) != NULL; i++)
+    {
+        idx = *((int*) index234(ds->minor->indices, i));
+        draw_circle(dr, pts[idx].x + x_off, pts[idx].y, POINTRADIUS,
+                    COL_MINORPOINT, COL_MINORPOINT);
+    }
+
+    draw_update(dr, 0, 0, ui->width, ui->height);
 }
 
 static float game_anim_length(const game_state *oldstate,
                               const game_state *newstate, int dir, game_ui *ui)
 {
-    return 0.0F;
+    if (ui->just_merged) return 0.0F;
+    else return 0.2F;
 }
 
 static float game_flash_length(const game_state *oldstate,
                                const game_state *newstate, int dir, game_ui *ui)
 {
-    return 0.0F;
+    if ((dir > 0 ? oldstate : newstate)->solved && !(dir < 0 ? oldstate : newstate)->solved &&
+        !(dir > 0 ? oldstate : newstate)->cheated && !(dir < 0 ? oldstate : newstate)->cheated)
+        return 0.3F;
+    else
+        return 0.0F;
 }
 
 static int game_status(const game_state *state)
