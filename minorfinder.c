@@ -31,13 +31,22 @@
 
 enum {
     COL_BACKGROUND,
+    COL_OUTLINE,
+    COL_GRIDBORDER,
     COL_BASEPOINT,
     COL_MINORPOINT,
     COL_MERGEPOINT,
+    COL_POINTOUTLINE,
     COL_EDGE,
     COL_CONTREDGE,
     COL_FLASH,
+    COL_TEXT,
     NCOLOURS
+};
+
+enum {
+    DEFAULT_N_BASE = 12,
+    DEFAULT_N_MIN = 5
 };
 
 /*
@@ -47,11 +56,6 @@ enum grid {
     GRID_LEFT,
     GRID_RIGHT,
     NGRIDS
-};
-
-enum {
-    DEFAULT_N_BASE = 12,
-    DEFAULT_N_MIN = 5
 };
 
 /*
@@ -666,7 +670,7 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     int* sub_sizes;
     int* sub_offsets;
 
-    long i, j;
+    long i, j, k, l;
     long margin_min = 4 * COORDUNIT;
     long size;
     long count;
@@ -791,7 +795,7 @@ static char *new_game_desc(const game_params *params, random_state *rs,
 
     /*
      * Generate random coordinates for the points of our subgraphs. The points
-     * of a subgraph must lay in the previously calculated circle with a minor
+     * of a subgraph must lie in the previously calculated circle with a minor
      * point as center and the distance to the neirest neighbour of the center
      * as radius.
      */
@@ -851,8 +855,13 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     edges_base_234 = newtree234(edgecmp);
 
     /*
-     * Add edges between the subgraphs in such a way that if the subgraphs would
-     * be replaced by the minor points again the outcome would be our minor graph.
+     * Add edges between the subgraphs such that if the subgraphs would be replaced
+     * by the minor points again the outcome would be our minor graph. Also make sure
+     * that the edges don't cross existing ones. Therefore we just iterate over all
+     * vertices of the source and target subgraph respectively until we find a non-
+     * corssing edge. This works because the circular areas in which the subgraphs
+     * lie don't intersect. Hence there must exist a non-corssing edge between two
+     * subgraphs if the corresponding minor points share an edge.
      */
     vtcs_base = snewn(n_base, vertex);
     for (i = 0; i < n_base; i++)
@@ -863,11 +872,30 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     }
     for (i = 0; (e = index234(edges_min_234, i)) != NULL; i++)
     {
-        int idxa = random_upto(rs, sub_sizes[e->src]) + sub_offsets[e->src];
-        int idxb = random_upto(rs, sub_sizes[e->tgt]) + sub_offsets[e->tgt];
-        addedge(edges_base_234, idxa, idxb);
-        vtcs_base[idxa].deg++;
-        vtcs_base[idxb].deg++;
+        for (j = sub_offsets[e->src]; j < sub_offsets[e->src+1]; j++)
+        {
+            for (k = sub_offsets[e->tgt]; k < sub_offsets[e->tgt+1]; k++)
+            {
+                bool crossing = false;
+                edge* eb;
+                for (l = 0; (eb = index234(edges_base_234, l)) != NULL; l++)
+                {
+                    if (cross(pts_base[j], pts_base[k], pts_base[eb->src], pts_base[eb->tgt]))
+                    {
+                        crossing = true;
+                        break;
+                    }
+                }
+                if (!crossing)
+                {
+                    addedge(edges_base_234, j, k);
+                    vtcs_base[j].deg++;
+                    vtcs_base[k].deg++;
+                    goto next_iter;
+                }
+            }
+        }
+        next_iter:;
     }
 
     /*
@@ -1474,6 +1502,11 @@ static char *game_text_format(const game_state *state)
 
 struct game_ui {
 
+    /* grid size */
+    long g_size;
+    /* grid margin*/
+    long g_margin;
+
     /* game window size */
     long width, height;
 
@@ -1489,9 +1522,10 @@ struct game_ui {
 static game_ui *new_ui(const game_state *state)
 {
     game_ui* ret = snew(game_ui);
-    long g_size = COORDLIMIT(state->params.n_base) * PREFERRED_TILESIZE;
-    ret->width = NGRIDS * g_size;
-    ret->height = g_size;
+    ret->g_size = COORDLIMIT(state->params.n_base) * PREFERRED_TILESIZE;
+    ret->g_margin = COORDMARGIN(ret->g_size);
+    ret->width = NGRIDS * ret->g_size;
+    ret->height = ret->g_size;
     ret->mergept_dom = -1;
     ret->mergept_rec = -1;
     ret->just_merged = false;
@@ -1565,20 +1599,35 @@ static float *game_colours(frontend *fe, int *ncolours)
 
     frontend_default_colour(fe, &ret[COL_BACKGROUND * 3]);
 
+    /* black */
+    ret[(COL_OUTLINE * 3) + 0] = 0.3F;
+    ret[(COL_OUTLINE * 3) + 1] = 0.3F;
+    ret[(COL_OUTLINE * 3) + 2] = 0.3F;
+
+    /* dark grey */
+    ret[(COL_GRIDBORDER * 3) + 0] = 0.3F;
+    ret[(COL_GRIDBORDER * 3) + 1] = 0.3F;
+    ret[(COL_GRIDBORDER * 3) + 2] = 0.3F;
+
     /* blue */
     ret[(COL_BASEPOINT * 3) + 0] = 0.0F;
     ret[(COL_BASEPOINT * 3) + 1] = 0.0F;
     ret[(COL_BASEPOINT * 3) + 2] = 1.0F;
 
     /* red */
-    ret[(COL_MINORPOINT * 3) + 0] = 0.0F;
+    ret[(COL_MINORPOINT * 3) + 0] = 1.0F;
     ret[(COL_MINORPOINT * 3) + 1] = 0.0F;
-    ret[(COL_MINORPOINT * 3) + 2] = 1.0F;
+    ret[(COL_MINORPOINT * 3) + 2] = 0.0F;
 
-    /* yellow */
-    ret[(COL_MERGEPOINT * 3) + 0] = 1.0F;
-    ret[(COL_MERGEPOINT * 3) + 1] = 0.8F;
+    /* green */
+    ret[(COL_MERGEPOINT * 3) + 0] = 0.0F;
+    ret[(COL_MERGEPOINT * 3) + 1] = 1.0F;
     ret[(COL_MERGEPOINT * 3) + 2] = 0.0F;
+
+    /* black */
+    ret[(COL_POINTOUTLINE * 3) + 0] = 0.0F;
+    ret[(COL_POINTOUTLINE * 3) + 1] = 0.0F;
+    ret[(COL_POINTOUTLINE * 3) + 2] = 0.0F;
 
     /* black */
     ret[(COL_EDGE * 3) + 0] = 0.0F;
@@ -1594,6 +1643,11 @@ static float *game_colours(frontend *fe, int *ncolours)
     ret[(COL_FLASH * 3) + 0] = 1.0F;
     ret[(COL_FLASH * 3) + 1] = 1.0F;
     ret[(COL_FLASH * 3) + 2] = 1.0F;
+
+    /* black */
+    ret[(COL_TEXT * 3) + 0] = 0.1F;
+    ret[(COL_TEXT * 3) + 1] = 0.1F;
+    ret[(COL_TEXT * 3) + 2] = 0.1F;
 
     *ncolours = NCOLOURS;
     return ret;
@@ -1628,14 +1682,11 @@ static void game_redraw(drawing *dr, game_drawstate *ds,
 {
     int i;
     int idx;
-    long g_size;
     long x_off;
     edge* e;
     point* esrc;
     point* etgt;
     point* pts;
-
-    g_size = COORDLIMIT(state->params.n_base) * PREFERRED_TILESIZE;
     
     /*
      * The initial contents of the window are not guaranteed and
@@ -1645,8 +1696,16 @@ static void game_redraw(drawing *dr, game_drawstate *ds,
      */
     draw_rect(dr, 0, 0, ui->width, ui->height, COL_BACKGROUND);
 
+    draw_rect_outline(dr, 0, 0, ui->width, ui->height, COL_OUTLINE);
+    draw_thick_line(dr, 2.0F, (float) ui->g_size, 0.0F, (float) ui->g_size,
+                    (float) ui->g_size, COL_GRIDBORDER);
+    draw_text(dr, ui->g_size / 2, ui->g_margin / 2, FONT_FIXED, ui->g_margin / 2,
+                ALIGN_VCENTRE | ALIGN_HCENTRE, COL_TEXT, "MINOR");
+    draw_text(dr, ui->g_size + (ui->g_size / 2), ui->g_margin / 2, FONT_FIXED, ui->g_margin / 2,
+                ALIGN_VCENTRE | ALIGN_HCENTRE, COL_TEXT, "ORIGINAL");
+
     pts = ds->base->points;
-    x_off = ds->base->grid * g_size;
+    x_off = ds->base->grid * ui->g_size;
     for (i = 0; (e = index234(ds->base->edges, i)) != NULL; i++)
     {
         esrc = pts + e->src;
@@ -1657,11 +1716,11 @@ static void game_redraw(drawing *dr, game_drawstate *ds,
     {
         idx = *((int*) index234(ds->base->indices, i));
         draw_circle(dr, pts[idx].x + x_off, pts[idx].y, POINTRADIUS,
-                    COL_BASEPOINT, COL_BASEPOINT);
+                    COL_BASEPOINT, COL_POINTOUTLINE);
     }
 
     pts = ds->minor->points;
-    x_off = ds->minor->grid * g_size;
+    x_off = ds->minor->grid * ui->g_size;
     for (i = 0; (e = index234(ds->minor->edges, i)) != NULL; i++)
     {
         esrc = pts + e->src;
@@ -1672,7 +1731,7 @@ static void game_redraw(drawing *dr, game_drawstate *ds,
     {
         idx = *((int*) index234(ds->minor->indices, i));
         draw_circle(dr, pts[idx].x + x_off, pts[idx].y, POINTRADIUS,
-                    COL_MINORPOINT, COL_MINORPOINT);
+                    COL_MINORPOINT, COL_POINTOUTLINE);
     }
 
     draw_update(dr, 0, 0, ui->width, ui->height);
@@ -1681,18 +1740,13 @@ static void game_redraw(drawing *dr, game_drawstate *ds,
 static float game_anim_length(const game_state *oldstate,
                               const game_state *newstate, int dir, game_ui *ui)
 {
-    if (ui->just_merged) return 0.0F;
-    else return 0.2F;
+    return 0.0F;
 }
 
 static float game_flash_length(const game_state *oldstate,
                                const game_state *newstate, int dir, game_ui *ui)
 {
-    if ((dir > 0 ? oldstate : newstate)->solved && !(dir < 0 ? oldstate : newstate)->solved &&
-        !(dir > 0 ? oldstate : newstate)->cheated && !(dir < 0 ? oldstate : newstate)->cheated)
-        return 0.3F;
-    else
-        return 0.0F;
+    return 0.0F;
 }
 
 static int game_status(const game_state *state)
