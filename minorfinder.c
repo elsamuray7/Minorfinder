@@ -643,8 +643,12 @@ static void addedges(tree234* edges, tree234* vertices, point* points, int n_pts
     }
 }
 
+/*
+ * These parameters are highly sensitive, changing them may cause problems when
+ * generating new game descriptions.
+ */
 #define COORDMARGIN_BASE 1
-#define COORDMARGIN_MIN 2
+#define COORDMARGIN_MIN 3
 #define COORDDENSITY_MIN 2
 #define COORDLIMIT(n) ((n) - ((n) % COORDDENSITY_MIN) + (2 * COORDMARGIN_BASE) + 1)
 #define COORDUNIT 32
@@ -690,8 +694,10 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     coord_lim = COORDLIMIT(n_base);
 
     /*
-     * Generate random coordinates for the points of the minor. The coordinates will
-     * be in the range (g_margin + margin, g_size - g_margin - margin).
+     * Generate random coordinates for the minor points. The coordinates will
+     * be in the following range:
+     * 
+     * [COORDMARGIN_MIN, coord_lim - COORDMARGIN_MIN]
      */
     upper_lim = coord_lim - (2 * COORDMARGIN_MIN);
     count = (upper_lim / COORDDENSITY_MIN) + 1;
@@ -706,10 +712,10 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     shuffle(coords_x, count, sizeof(*coords_x), rs);
     shuffle(coords_y, count, sizeof(*coords_y), rs);
 
-    /* Allocate memory for the points of the minor */
+    /* Allocate memory for the minor points */
     pts_min = snewn(n_min, point);
 
-    /* Assign random coordinates to the points of the minor */
+    /* Assign random coordinates to the minor points */
     for (i = 0; i < n_min; i++)
     {
         pt = pts_min + i;
@@ -720,13 +726,13 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     sfree(coords_x);
     sfree(coords_y);
 
-    /* Create the 234-tree that stores the edges of the minor */
+    /* Create the 234-tree that stores the minor edges */
     edges_min_234 = newtree234(edgecmp);
     
     /*
      * Add edges to the minor. Make sure that new edges don't cross existing ones
      * and that the degree of the vertices doesn't increase beyond MAXDEGREE. Keep
-     * adding new edges untill there are less than two vertices left in the vertex
+     * adding new edges until there are less than two vertices left in the vertex
      * 234-tree.
      */
     vtcs_min = snewn(n_min, vertex);
@@ -751,7 +757,7 @@ static char *new_game_desc(const game_params *params, random_state *rs,
      * of the minor by subgraphs. To determine the areas in which we can place
      * the subgraphs we need to find for every point of the minor the distance
      * to its nearest neighbour. The distances are used to calculate the radii
-     * of circular subgraph areas around the points of our minor.
+     * of circular subgraph areas around the minor points.
      */
     upper_lim = (coord_lim - COORDMARGIN_BASE) * COORDUNIT;
     lower_lim = COORDMARGIN_BASE * COORDUNIT;
@@ -774,14 +780,14 @@ static char *new_game_desc(const game_params *params, random_state *rs,
         }
     }
 
-    /* Allocare memory for the subgraphs that replace the points of the minor */
+    /* Allocare memory for the subgraphs that replace the minor points */
     subs = snewn(n_min, point*);
 
     /*
-     * Generate random coordinates for the points of our subgraphs. The points
-     * of a subgraph must lie in the previously calculated circle with a minor
-     * point as center and the distance to the neirest neighbour of the center
-     * as radius.
+     * Generate random coordinates for the subgraph points. The points of a
+     * subgraph must lie in the previously calculated circle with the cor-
+     * responding minor point as center and half the distance to the centers
+     * neirest neighbour as radius.
      */
     count = 2 * n_sub;
     angles = snewn(count, double);
@@ -809,7 +815,7 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     /* Allocate memory for the base graph points */
     pts_base = snewn(n_base, point);
 
-    /* Copy all subgraph points into the array of base points */
+    /* Copy all subgraph points into the array of base graph points */
     for (i = 0; i < n_min; i++)
     {
         sub = subs[i];
@@ -821,12 +827,12 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     for (i = 0; i < n_min; i++) sfree(subs[i]);
     sfree(subs);
 
-    /* Create the 234-tree that stores the edges of the base graph */
+    /* Create the 234-tree that stores the base graph edges */
     edges_base_234 = newtree234(edgecmp);
 
     /*
      * Add edges between the subgraphs such that if the subgraphs would be replaced
-     * by the minor points again the outcome would be our minor graph. Also make sure
+     * by the minor points again the outcome would be the minor graph. Also make sure
      * that the edges don't cross existing ones. Therefore we just iterate over all
      * vertices of the source and target subgraph respectively until we find a non-
      * corssing edge. This works because the circular areas in which the subgraphs
@@ -887,8 +893,8 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     }
 
     /*
-     * Add edges to the subgraphs of our base graph. Make sure that edges don't
-     * cross and the degree of the vertices does not increase beyond MAXDEGREE.
+     * Add edges to the subgraphs. Make sure that edges don't cross and the degree
+     * of the vertices does not increase beyond MAXDEGREE.
      */
     for (i = 0; i < n_min; i++)
     {
@@ -906,17 +912,10 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     }
 
     /*
-     * TODO:
-     * Currently the remaining points and the subgraph points can overlap.
-     * To avoid this we would have to check the remaining points for their
-     * distance to any of the subgraph points. This might be complicated
-     * and expensive, hence I want to see whether it's really neccessary
-     * first.
-     */
-
-    /*
-     * Generate random coordinates for the remaining points. The coordinates
-     * will be in the range (g_margin, g_size - g_margin).
+     * Generate random coordinates for the remaining points. The coordinates will
+     * be in the following range:
+     * 
+     * [COORDMARGIN_BASE, coord_lim - COORDMARGIN_BASE]
      */
     count = coord_lim - (2 * COORDMARGIN_BASE) + 1;
     coords_x = snewn(count, long);
@@ -943,7 +942,7 @@ static char *new_game_desc(const game_params *params, random_state *rs,
 
     /*
      * Add edges to the base graph including the remaining points. Make sure that
-     * edges don't cross and the degree of the vertices does not increase beyond
+     * edges don't cross and the degree of the vertices doesn't increase beyond
      * MAXDEGREE.
      */
     vtcs_234 = newtree234(vertcmp);
@@ -962,7 +961,7 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     /*
      * The generation of a new game description is finished. Now we need to encode
      * the description in a dynamically allocated string and connect this string to
-     * the return value of our method.
+     * the methods return value.
      */
     ret = NULL;
     {
@@ -976,28 +975,19 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     edge* edges_base = snewn(count_base, edge);
 
     /*
-     * Calculate the length of our game description. The game description contains
-     * information about the points and edges of our minor and base graph. The points
+     * Calculate the length of the game description. The game description contains
+     * information about the points and edges of the minor and base graph. The points
      * and edges are encoded like this:
      * 
      * (1) point: <index> - <x coordinate> - <y coordinate>
      * (2) edge: <source index> - <target index>
      * 
-     * Furthermore the game description contain information about the subgraph offsets.
-     * This information is required to determine whether the player has solved the game
-     * or not. The subgraph offsets are encoded like this:
-     * 
-     * (3) <subgraph index> - <subgraph offset>
-     * 
      * There we have our game description, a concatenation of encoded point and edge
      * data followed by an encoding of the subgraph offsets. We have four collections
-     * of either points or edges that go into our description. The first two sets
-     * belong to the minor, the latter two belong to the base graph. These four sets
-     * are followed by a collection of subgraph offsets. Single points, edges and
-     * subgraph offsets are separated by commas whereas whole sets are separated by
-     * semicolons:
+     * of either points or edges that go into our description. The first two sets be-
+     * long to the minor, the latter two belong to the base graph.
      * 
-     * (1),(1),...;(2),(2),...;(1),(1),...;(2),(2),...;(3),(3),...;
+     * (1),(1),...;(2),(2),...;(1),(1),...;(2),(2);
      */
     for (i = 0; i < n_min; i++)
     {
@@ -1028,7 +1018,7 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     
     /*
      * Now encode the game description and write it into the allocated string
-     * that will be connected to our return value.
+     * that will be connected to the methods return value.
      */
     for (i = 0; i < n_min - 1; i++)
     {
@@ -1070,7 +1060,7 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     sfree(edges_base);
     }
 
-    /* The aux string is not required anymore. Therefore it is set to NULL. */
+    /* The aux string is not required. Therefore it is set to NULL. */
     *aux = NULL;
 
     sfree(pts_min);
@@ -1084,8 +1074,9 @@ static char *new_game_desc(const game_params *params, random_state *rs,
 }
 
 /*
- * Validate a graph description, i.e. a string that specifies a set of points by their index and
- * position and a set of edges between those points by the point indices of their incident vertices.
+ * Validate a graph description, i.e. a string that specifies a set of points by
+ * their index and position and a set of edges between those points by the point
+ * indices of their incident vertices.
  */
 static const char* validate_graph(const char** desc, int n, long lim, long mar)
 {
@@ -1160,7 +1151,9 @@ static const char *validate_desc(const game_params *params, const char *desc)
 }
 
 /*
- * Parse a graph description that has been validated by validate_graph
+ * Parse a graph description, i.e. a string that specifies a set of points by their
+ * index and position and a set of edges between those points by the point indices
+ * of their incident vertices.
  */
 static graph* parse_graph(const char** desc, enum grid grid, int n, long lim, long mar)
 {
@@ -1292,8 +1285,9 @@ static game_state *dup_game(const game_state *state)
 }
 
 /*
- * Free the memory that points to a graph structure if its refcount is equal to or smaller than 0,
- * inlcudes freeing the point array and the vertex and edge 234-trees.
+ * Free the memory that points to a graph structure if its refcount is equal to or
+ * smaller than 0. If its cpycount is equal to or smaller than 0 also free the point
+ * array and the vertex and edge 234-trees.
  */
 static void free_graph(graph* gr, bool iscpy)
 {
@@ -1323,8 +1317,8 @@ static void free_game(game_state *state)
 }
 
 /*
- * Replace the given edge in the given edge 234-tree. The new edge will have new_src and new_tgt 
- * as source and target respetively.
+ * Replace the given edge in the given edge 234-tree. The new edge will have
+ * new_src and new_tgt as source and target respetively.
  */
 /*static void replace_edge(tree234* edges, edge* e, int new_src, int new_tgt)
 {
@@ -1349,8 +1343,8 @@ static void free_game(game_state *state)
 
 
 /* 
- * Contract an edge from our graph, i.e. merge its incident vertices in such a way that no edges
- * are lost except for the contracted edge itself.
+ * Contract an edge from a graph, i.e. merge its incident vertices such that
+ * no edges are lost except for the contracted edge itself.
  */
 /*static void contract_edge(graph* graph, int src, int tgt)
 {
