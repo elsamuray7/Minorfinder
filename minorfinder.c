@@ -604,7 +604,7 @@ static void addedges(tree234* edges, tree234* vertices, point* points, int n_pts
                             points[e->src], points[e->tgt]))
             {
                 crossing = true;
-                goto add;
+                goto add_edge;
             }
         }
         /* check for crossing points */
@@ -630,13 +630,13 @@ static void addedges(tree234* edges, tree234* vertices, point* points, int n_pts
                     if (cross(points[vxa->idx], points[vxb->idx], pta, ptb))
                     {
                         crossing = true;
-                        goto add;
+                        goto add_edge;
                     }
                 }
             }
         }
 
-        add:
+        add_edge:
         if (!crossing)
         {
             addedge(edges, vxa->idx, vxb->idx);
@@ -683,8 +683,7 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     const int n_sub = n_base / n_min;
 
     long i, j, k, l, m;
-    long count;
-    long upper_lim, lower_lim;
+    long tmp, tmp2, tmp3;
     long coord_lim;
     long* coords_x;
     long* coords_y;
@@ -715,18 +714,18 @@ static char *new_game_desc(const game_params *params, random_state *rs,
      * 
      * [COORDMARGIN_MIN, coord_lim - COORDMARGIN_MIN]
      */
-    upper_lim = coord_lim - (2 * COORDMARGIN_MIN);
-    count = (upper_lim / COORDDENSITY_MIN) + 1;
-    coords_x = snewn(count, long);
-    coords_y = snewn(count, long);
-    for (i = 0; i <= upper_lim; i += COORDDENSITY_MIN)
+    tmp = coord_lim - (2 * COORDMARGIN_MIN);
+    tmp2 = (tmp / COORDDENSITY_MIN) + 1;
+    coords_x = snewn(tmp2, long);
+    coords_y = snewn(tmp2, long);
+    for (i = 0; i <= tmp; i += COORDDENSITY_MIN)
     {
         int idx = i / COORDDENSITY_MIN;
         coords_x[idx] = i + COORDMARGIN_MIN;
         coords_y[idx] = i + COORDMARGIN_MIN;
     }
-    shuffle(coords_x, count, sizeof(*coords_x), rs);
-    shuffle(coords_y, count, sizeof(*coords_y), rs);
+    shuffle(coords_x, tmp2, sizeof(*coords_x), rs);
+    shuffle(coords_y, tmp2, sizeof(*coords_y), rs);
 
     /* Allocate memory for the minor points */
     pts_min = snewn(n_min, point);
@@ -760,10 +759,10 @@ static char *new_game_desc(const game_params *params, random_state *rs,
         vx->deg = 0;
         add234(vtcs_234, vx);
     }
-    count = n_min;
-    while (count >= 2)
+    tmp = n_min;
+    while (tmp >= 2)
     {
-        addedges(edges_min_234, vtcs_234, pts_min, n_min, &count);
+        addedges(edges_min_234, vtcs_234, pts_min, n_min, &tmp);
     }
     sfree(vtcs_min);
     freetree234(vtcs_234);
@@ -775,14 +774,14 @@ static char *new_game_desc(const game_params *params, random_state *rs,
      * to its nearest neighbour. The distances are used to calculate the radii
      * of circular subgraph areas around the minor points.
      */
-    upper_lim = (coord_lim - COORDMARGIN_BASE) * COORDUNIT;
-    lower_lim = COORDMARGIN_BASE * COORDUNIT;
+    tmp = COORDMARGIN_BASE * COORDUNIT;
+    tmp2 = (coord_lim - COORDMARGIN_BASE) * COORDUNIT;
     radii = snewn(n_min, long);
     for (i = 0; i < n_min; i++)
     {
         pt = pts_min + i;
-        radii[i] = min(min(pt->x - lower_lim, upper_lim - pt->x),
-                        min(pt->y - lower_lim, upper_lim - pt->y));
+        radii[i] = min(min(pt->x - tmp, tmp2 - pt->x),
+                        min(pt->y - tmp, tmp2 - pt->y));
     }
     for (i = 0; i < n_min - 1; i++)
     {
@@ -805,17 +804,17 @@ static char *new_game_desc(const game_params *params, random_state *rs,
      * responding minor point as center and half the distance to the centers
      * neirest neighbour as radius.
      */
-    count = 2 * n_sub;
-    angles = snewn(count, double);
-    for (i = 0; i < count; i++)
+    tmp = 2 * n_sub;
+    angles = snewn(tmp, double);
+    for (i = 0; i < tmp; i++)
     {
-        angles[i] = (double) i * (2.0 * PI) / (double) count;
+        angles[i] = (double) i * (2.0 * PI) / (double) tmp;
     }
     for (i = 0; i < n_min; i++)
     {
         subs[i] = snewn(n_sub, point);
         sub = subs[i];
-        shuffle(angles, count, sizeof(double), rs);
+        shuffle(angles, tmp, sizeof(double), rs);
         for (j = 0; j < n_sub; j++)
         {
             long r = random_upto(rs, radii[i] - (3 * POINTRADIUS) + 1) + (2 * POINTRADIUS);
@@ -880,7 +879,7 @@ static char *new_game_desc(const game_params *params, random_state *rs,
                     else if (cross(pts_base[j], pts_base[k], pts_base[eb->src], pts_base[eb->tgt]))
                     {
                         crossing = true;
-                        goto add;
+                        goto add_edge;
                     }
                 }
                 /* check for crossing points */
@@ -906,12 +905,12 @@ static char *new_game_desc(const game_params *params, random_state *rs,
                             if (cross(pts_base[j], pts_base[k], pta, ptb))
                             {
                                 crossing = true;
-                                goto add;
+                                goto add_edge;
                             }
                         }
                     }
                 }
-                add:
+                add_edge:
                 if (!crossing)
                 {
                     addedge(edges_base_234, j, k);
@@ -935,10 +934,10 @@ static char *new_game_desc(const game_params *params, random_state *rs,
         {
             add234(vtcs_234, vtcs_base + j);
         }
-        count = n_sub;
-        while (count >= 2)
+        tmp = n_sub;
+        while (tmp >= 2)
         {
-            addedges(edges_base_234, vtcs_234, pts_base, n_min * n_sub, &count);
+            addedges(edges_base_234, vtcs_234, pts_base, n_min * n_sub, &tmp);
         }
         freetree234(vtcs_234);
     }
@@ -949,25 +948,69 @@ static char *new_game_desc(const game_params *params, random_state *rs,
      * 
      * [COORDMARGIN_BASE, coord_lim - COORDMARGIN_BASE]
      */
-    count = coord_lim - (2 * COORDMARGIN_BASE) + 1;
-    coords_x = snewn(count, long);
-    coords_y = snewn(count, long);
-    for (i = 0; i < count; i++)
+    tmp = coord_lim - (2 * COORDMARGIN_BASE) + 1;
+    coords_x = snewn(tmp, long);
+    coords_y = snewn(tmp, long);
+    for (i = 0; i < tmp; i++)
     {
         coords_x[i] = i + COORDMARGIN_BASE;
         coords_y[i] = i + COORDMARGIN_BASE;
     }
-    shuffle(coords_x, count, sizeof(*coords_x), rs);
-    shuffle(coords_y, count, sizeof(*coords_y), rs);
+    shuffle(coords_x, tmp, sizeof(*coords_x), rs);
+    shuffle(coords_y, tmp, sizeof(*coords_y), rs);
 
     /* Assign random coordinates to the remaining points */
-    count = n_base - (n_min * n_sub);
-    for (i = 0; i < count; i++)
+    tmp2 = n_min * n_sub;
+    tmp3 = 0;
+    for (i = 0; i < tmp; i++)
     {
-       pt = pts_base + (n_base - count + i);
-       pt->x = coords_x[i] * COORDUNIT;
-       pt->y = coords_y[i] * COORDUNIT;
-       pt->d = 1;
+        long x = coords_x[i] * COORDUNIT;
+        for (j = 0; j < tmp; j++)
+        {
+            bool overlaying = false;
+            long y = coords_y[j] * COORDUNIT;
+            /* check for an overlaying with an edge */
+            for (k = 0; (e = index234(edges_base_234, k)) != NULL; k++)
+            {
+                for (l = 0; l < POINT_CROSSCHECK_ACCURACY; l++)
+                {
+                    double a = (double) l * (2.0 * PI) / (double) (2 * POINT_CROSSCHECK_ACCURACY);
+                    point pta;
+                    point ptb;
+                    pta.x = x + ((POINTRADIUS + 2) * sin(a));
+                    pta.y = y + ((POINTRADIUS + 2) * cos(a));
+                    pta.d = 1;
+                    ptb.x = x - ((POINTRADIUS + 2) * sin(a));
+                    ptb.y = y - ((POINTRADIUS + 2) * cos(a));
+                    ptb.d = 1;
+                    if (cross(pts_base[e->src], pts_base[e->tgt], pta, ptb))
+                    {
+                        overlaying = true;
+                        goto assign_coords;
+                    }
+                }
+            }
+            /* check for an overlaying with a point */
+            for (k = 0; k < tmp2 + tmp3; k++)
+            {
+                pt = pts_base + k;
+                if (squarert(square(pt->x - x) + square(pt->y - y)) < (2 * POINTRADIUS) + 2)
+                {
+                    overlaying = true;
+                    goto assign_coords;
+                }
+            }
+            assign_coords:
+            if (!overlaying)
+            {
+                pt = pts_base + (tmp2 + tmp3++);
+                pt->x = x;
+                pt->y = y;
+                pt->d = 1;
+                break;
+            }
+        }
+        if (tmp2 + tmp3 >= n_base) break;
     }
     sfree(coords_x);
     sfree(coords_y);
@@ -982,10 +1025,10 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     {
         add234(vtcs_234, vtcs_base + i);
     }
-    count = n_base;
-    while (count >= 2)
+    tmp = n_base;
+    while (tmp >= 2)
     {
-        addedges(edges_base_234, vtcs_234, pts_base, n_base, &count);
+        addedges(edges_base_234, vtcs_234, pts_base, n_base, &tmp);
     }
     sfree(vtcs_base);
     freetree234(vtcs_234);
