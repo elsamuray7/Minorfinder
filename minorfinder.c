@@ -570,7 +570,9 @@ static int intcmp(void* av, void* bv)
  * 
  */
 
-#define MAXDEGREE 4
+#define MAXDEGREE 5
+#define POINTRADIUS 5
+#define POINT_CROSSCHECK_ACCURACY 50
 
 static void addedges(tree234* edges, tree234* vertices, point* points, int n_pts, long* cnt)
 {
@@ -581,7 +583,7 @@ static void addedges(tree234* edges, tree234* vertices, point* points, int n_pts
     for (i = (*cnt) - 1; i >= 0;)
     {
         bool crossing = false;
-        int j;
+        int j, k;
         vertex* vxb = index234(vertices, i);
         edge* e;
 
@@ -602,7 +604,7 @@ static void addedges(tree234* edges, tree234* vertices, point* points, int n_pts
                             points[e->src], points[e->tgt]))
             {
                 crossing = true;
-                break;
+                goto add;
             }
         }
         /* check for crossing points */
@@ -612,13 +614,29 @@ static void addedges(tree234* edges, tree234* vertices, point* points, int n_pts
             {
                 continue;
             }
-            else if (cross(points[vxa->idx], points[vxb->idx], points[j], points[j]))
+            else
             {
-                crossing = true;
-                break;
+                for (k = 0; k < POINT_CROSSCHECK_ACCURACY; k++)
+                {
+                    double a = (double) k * (2.0 * PI) / (double) (2 * POINT_CROSSCHECK_ACCURACY);
+                    point pta;
+                    point ptb;
+                    pta.x = points[j].x + ((POINTRADIUS + 2) * sin(a));
+                    pta.y = points[j].y + ((POINTRADIUS + 2) * cos(a));
+                    pta.d = 1;
+                    ptb.x = points[j].x + ((POINTRADIUS + 2) * sin(a + PI));
+                    ptb.y = points[j].y - ((POINTRADIUS + 2) * cos(a + PI));
+                    ptb.d = 1;
+                    if (cross(points[vxa->idx], points[vxb->idx], pta, ptb))
+                    {
+                        crossing = true;
+                        goto add;
+                    }
+                }
             }
         }
 
+        add:
         if (!crossing)
         {
             addedge(edges, vxa->idx, vxb->idx);
@@ -653,8 +671,6 @@ static void addedges(tree234* edges, tree234* vertices, point* points, int n_pts
 #define COORDLIMIT(n) ((n) - ((n) % COORDDENSITY_MIN) + (2 * COORDMARGIN_BASE) + 1)
 #define COORDUNIT 32
 
-#define POINTRADIUS 5
-
 #define square(x) ((x) * (x))
 
 static char *new_game_desc(const game_params *params, random_state *rs,
@@ -666,7 +682,7 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     const int n_base = params->n_base;
     const int n_sub = n_base / n_min;
 
-    long i, j, k, l;
+    long i, j, k, l, m;
     long count;
     long upper_lim, lower_lim;
     long coord_lim;
@@ -864,7 +880,7 @@ static char *new_game_desc(const game_params *params, random_state *rs,
                     else if (cross(pts_base[j], pts_base[k], pts_base[eb->src], pts_base[eb->tgt]))
                     {
                         crossing = true;
-                        break;
+                        goto add;
                     }
                 }
                 /* check for crossing points */
@@ -874,12 +890,28 @@ static char *new_game_desc(const game_params *params, random_state *rs,
                     {
                         continue;
                     }
-                    else if (cross(pts_base[j], pts_base[k], pts_base[l], pts_base[l]))
+                    else
                     {
-                        crossing = true;
-                        break;
+                        for (m = 0; m < POINT_CROSSCHECK_ACCURACY; m++)
+                        {
+                            double a = (double) m * (2.0 * PI) / (double) (2 * POINT_CROSSCHECK_ACCURACY);
+                            point pta;
+                            point ptb;
+                            pta.x = pts_base[l].x + ((POINTRADIUS + 2) * sin(a));
+                            pta.y = pts_base[l].y + ((POINTRADIUS + 2) * cos(a));
+                            pta.d = 1;
+                            ptb.x = pts_base[l].x + ((POINTRADIUS + 2) * sin(PI + a));
+                            ptb.y = pts_base[l].y + ((POINTRADIUS + 2) * cos(PI + a));
+                            ptb.d = 1;
+                            if (cross(pts_base[j], pts_base[k], pta, ptb))
+                            {
+                                crossing = true;
+                                goto add;
+                            }
+                        }
                     }
                 }
+                add:
                 if (!crossing)
                 {
                     addedge(edges_base_234, j, k);
