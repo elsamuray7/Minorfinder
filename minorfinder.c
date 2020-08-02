@@ -624,8 +624,8 @@ static void addedges(tree234* edges, tree234* vertices, point* points, int n_pts
                     pta.x = points[j].x + ((POINTRADIUS + 2) * sin(a));
                     pta.y = points[j].y + ((POINTRADIUS + 2) * cos(a));
                     pta.d = 1;
-                    ptb.x = points[j].x + ((POINTRADIUS + 2) * sin(a + PI));
-                    ptb.y = points[j].y - ((POINTRADIUS + 2) * cos(a + PI));
+                    ptb.x = points[j].x - ((POINTRADIUS + 2) * sin(a));
+                    ptb.y = points[j].y - ((POINTRADIUS + 2) * cos(a));
                     ptb.d = 1;
                     if (cross(points[vxa->idx], points[vxb->idx], pta, ptb))
                     {
@@ -900,8 +900,8 @@ static char *new_game_desc(const game_params *params, random_state *rs,
                             pta.x = pts_base[l].x + ((POINTRADIUS + 2) * sin(a));
                             pta.y = pts_base[l].y + ((POINTRADIUS + 2) * cos(a));
                             pta.d = 1;
-                            ptb.x = pts_base[l].x + ((POINTRADIUS + 2) * sin(PI + a));
-                            ptb.y = pts_base[l].y + ((POINTRADIUS + 2) * cos(PI + a));
+                            ptb.x = pts_base[l].x - ((POINTRADIUS + 2) * sin(a));
+                            ptb.y = pts_base[l].y - ((POINTRADIUS + 2) * cos(a));
                             ptb.d = 1;
                             if (cross(pts_base[j], pts_base[k], pta, ptb))
                             {
