@@ -582,30 +582,21 @@ static void addedges(tree234* edges, tree234* vertices, point* points, int n_pts
 
     for (i = (*cnt) - 1; i >= 0;)
     {
-        bool crossing = false;
         int j, k;
         vertex* vxb = index234(vertices, i);
         edge* e;
 
-        if (isedge(edges, vxa->idx, vxb->idx)) 
-        {
-            i--;
-            continue;
-        }
+        if (isedge(edges, vxa->idx, vxb->idx))
+            goto next_vertex; /* this edge already exists => next vertex */
         /* check for crossing edges */
         for (j = 0; (e = index234(edges, j)) != NULL; j++)
         {
             if (vxa->idx == e->src || vxa->idx == e->tgt ||
                 vxb->idx == e->src || vxb->idx == e->tgt)
-            {
                 continue;
-            }
             else if (cross(points[vxa->idx], points[vxb->idx],
                             points[e->src], points[e->tgt]))
-            {
-                crossing = true;
-                goto add_edge;
-            }
+                goto next_vertex; /* this edge crosses another edge => next vertex */
         }
         /* check for crossing points */
         for (j = 0; j < n_pts; j++)
@@ -628,36 +619,36 @@ static void addedges(tree234* edges, tree234* vertices, point* points, int n_pts
                     ptb.y = points[j].y - ((POINTRADIUS + 2) * cos(a));
                     ptb.d = 1;
                     if (cross(points[vxa->idx], points[vxb->idx], pta, ptb))
-                    {
-                        crossing = true;
-                        goto add_edge;
-                    }
+                        goto next_vertex; /* this edge crosses a point => next vertex */
                 }
             }
         }
 
-        add_edge:
-        if (!crossing)
+        addedge(edges, vxa->idx, vxb->idx);
+        del234(vertices, vxb);
+        vxb->deg++;
+        if (vxb->deg < MAXDEGREE)
         {
-            addedge(edges, vxa->idx, vxb->idx);
-            del234(vertices, vxb);
-            vxb->deg++;
-            if (vxb->deg < MAXDEGREE)
-            {
-                add234(vertices, vxb);
-            }
-            else
-            {
-                (*cnt)--;
-                i--;
-            }
-            vxa->deg++;
-            if (vxa->deg >= MAXDEGREE) break;
+            add234(vertices, vxb);
         }
         else
         {
+            (*cnt)--;
             i--;
         }
+        vxa->deg++;
+        if (vxa->deg >= MAXDEGREE) break;
+        continue;
+
+        /*
+         * I'm very sorry, I had to decide between multiple breaks, continues,
+         * further effort for checking the conditions for every break and con-
+         * tinue respectively and goto. The latter seemed to be the better evil.
+         * Here we decrement the loop variable and continue the loop to get the
+         * next vertex.
+         */
+        next_vertex:
+        i--;
     }
 }
 
@@ -867,20 +858,14 @@ static char *new_game_desc(const game_params *params, random_state *rs,
         {
             for (k = e->tgt * n_sub; k < (e->tgt + 1) * n_sub; k++)
             {
-                bool crossing = false;
                 edge* eb;
                 /* check for crossing edges */
                 for (l = 0; (eb = index234(edges_base_234, l)) != NULL; l++)
                 {
                     if (j == e->src || j == eb->tgt || k == eb->src || k == eb->tgt)
-                    {
                         continue;
-                    }
                     else if (cross(pts_base[j], pts_base[k], pts_base[eb->src], pts_base[eb->tgt]))
-                    {
-                        crossing = true;
-                        goto add_edge;
-                    }
+                        goto next_vertex; /* the edge crosses another edge => next vertex */
                 }
                 /* check for crossing points */
                 for (l = 0; l < n_min * n_sub; l++)
@@ -903,24 +888,28 @@ static char *new_game_desc(const game_params *params, random_state *rs,
                             ptb.y = pts_base[l].y - ((POINTRADIUS + 2) * cos(a));
                             ptb.d = 1;
                             if (cross(pts_base[j], pts_base[k], pta, ptb))
-                            {
-                                crossing = true;
-                                goto add_edge;
-                            }
+                                goto next_vertex; /* the edge crosses a point => next vertex */
                         }
                     }
                 }
-                add_edge:
-                if (!crossing)
-                {
-                    addedge(edges_base_234, j, k);
-                    vtcs_base[j].deg++;
-                    vtcs_base[k].deg++;
-                    goto next_iter;
-                }
+                addedge(edges_base_234, j, k);
+                vtcs_base[j].deg++;
+                vtcs_base[k].deg++;
+                goto next_edge;
+                /*
+                 * For consistency I decided to use goto whenever it was possible.
+                 * This seemed to be the better of two evils. Here we just continue
+                 * the loop to get the next vertex.
+                 */
+                next_vertex:;
             }
         }
-        next_iter:;
+        /*
+         * For consistency I decided to use goto whenever it was possible.
+         * This seemed to be the better of two evils. Here we just continue
+         * the loop to get the next edge.
+         */
+        next_edge:;
     }
 
     /*
@@ -967,7 +956,6 @@ static char *new_game_desc(const game_params *params, random_state *rs,
         long x = coords_x[i] * COORDUNIT;
         for (j = 0; j < tmp; j++)
         {
-            bool overlaying = false;
             long y = coords_y[j] * COORDUNIT;
             /* check for an overlaying with an edge */
             for (k = 0; (e = index234(edges_base_234, k)) != NULL; k++)
@@ -984,10 +972,7 @@ static char *new_game_desc(const game_params *params, random_state *rs,
                     ptb.y = y - ((POINTRADIUS + 2) * cos(a));
                     ptb.d = 1;
                     if (cross(pts_base[e->src], pts_base[e->tgt], pta, ptb))
-                    {
-                        overlaying = true;
-                        goto assign_coords;
-                    }
+                        goto next_coord_y; /* the point overlays an edge => next y-coordinate */
                 }
             }
             /* check for an overlaying with a point */
@@ -995,21 +980,26 @@ static char *new_game_desc(const game_params *params, random_state *rs,
             {
                 pt = pts_base + k;
                 if (squarert(square(pt->x - x) + square(pt->y - y)) < (2 * POINTRADIUS) + 2)
-                {
-                    overlaying = true;
-                    goto assign_coords;
-                }
+                    goto next_coord_y; /* the point overlays another point => next y-coordinate */
             }
-            assign_coords:
-            if (!overlaying)
-            {
-                pt = pts_base + (tmp2 + tmp3++);
-                pt->x = x;
-                pt->y = y;
-                pt->d = 1;
-                break;
-            }
+            pt = pts_base + (tmp2 + tmp3++);
+            pt->x = x;
+            pt->y = y;
+            pt->d = 1;
+            goto next_coord_x; /* succesfully assigned coordinates => find next coordinate pair */
+            /*
+             * For consistency I decided to use goto whenever it was possible.
+             * This seemed to be the better of two evils. Here we just continue
+             * the loop to get the next y-coordinate.
+             */
+            next_coord_y:;
         }
+        /*
+         * For consistency I decided to use goto whenever it was possible.
+         * This seemed to be the better of two evils. Here we just continue
+         * the loop to get the next x-coordinate.
+         */
+        next_coord_x:
         if (tmp2 + tmp3 >= n_base) break;
     }
     sfree(coords_x);
