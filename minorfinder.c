@@ -21,6 +21,9 @@
 #include "puzzles.h"
 #include "tree234.h"
 
+/* type alias for an unsigned char */
+#define uint8 unsigned char
+
 /* type alias for an unsigned integer */
 #define uint unsigned int
 
@@ -37,7 +40,8 @@ enum {
     COL_POINTOUTLINE,
     COL_EDGE,
     COL_CONTREDGE,
-    COL_FLASH,
+    COL_SOLVEFLASH,
+    COL_LOSEFLASH,
     COL_TEXT,
     NCOLOURS
 };
@@ -57,8 +61,8 @@ enum grid {
 };
 
 /*
- * A point in a grid, two rational coordinates and a denominator determine the position of
- * a point in a grid.
+ * A point in a grid, two rational coordinates and a denominator determine
+ * the position of a point in a grid.
  */
 typedef struct point {
     
@@ -84,8 +88,9 @@ typedef struct vertex {
 } vertex;
 
 /*
- * An edge that connects two vertices of a graph. Despite the fact that we use src and tgt as
- * identifiers for the vertices that are incident to an edge, edges do not have a direction.
+ * An edge that connects two vertices of a graph. Despite the fact that we
+ * use src and tgt as identifiers for the vertices that are incident to an
+ * edge, edges do not have a direction.
  */
 typedef struct edge {
 
@@ -95,16 +100,13 @@ typedef struct edge {
 } edge;
 
 /*
- * An undirected graph that consists of a set of points (vertices) and edges that connect
- * these vertices.
+ * An undirected graph that consists of a set of points (vertices) and edges
+ * that connect these vertices.
  */
 typedef struct graph {
 
     /* number of references to the graph - for deallocation */
     int refcount;
-
-    /* number of copies of the graph - for deallocation */
-    int* cpycount;
 
     /* the grid in which the graph is drawn - determines its coordinate offset */
     enum grid grid;
@@ -118,6 +120,9 @@ typedef struct graph {
 
     /* 234-tree of edges - maps the current game state */
     tree234* edges;
+
+    /* indicates whether this graph has been created by duplicating another graph */
+    bool iscpy;
 
 } graph;
 
@@ -142,6 +147,8 @@ struct game_state {
     bool solved;
     /* player used solve function */
     bool cheated;
+    /* player lost game */
+    bool lost;
 
 };
 
@@ -205,29 +212,39 @@ static game_params *dup_params(const game_params *params)
 
 static void decode_params(game_params *params, char const *string)
 {
-    if (*(string++) == 'b') {
-        params->n_base = atoi(string);
-        while (*string && isdigit((unsigned char) *string)) string++;
-    }
-    else
+    if (*string == 'b')
     {
-        params->n_base = DEFAULT_N_BASE;
+        string++;
+        if (*string && isdigit((uint8) *string))
+        {
+            params->n_base = atoi(string);
+            while (*string && isdigit((uint8) *string)) string++;
+            if (*string == '-')
+            {
+                string++;
+                if (*string == 'm')
+                {
+                    string++;
+                    if (*string && isdigit((uint8) *string))
+                    {
+                        params->n_min = atoi(string);
+                        return; /* params were correctly encoded */
+                    }
+                }
+            }
+        }
     }
-    if (*(string++) == 'm')
-    {
-        params->n_min = atoi(string);
-    }
-    else
-    {
-        params->n_min = DEFAULT_N_MIN;
-    }
+
+    /* params encoding was incorrect */
+    params->n_base = DEFAULT_N_BASE;
+    params->n_min = DEFAULT_N_MIN;
 }
 
 static char *encode_params(const game_params *params, bool full)
 {
     char buf[80];
 
-    sprintf(buf, "b%dm%d", params->n_base, params->n_min);
+    sprintf(buf, "b%d-m%d", params->n_base, params->n_min);
     
     return dupstr(buf);
 }
@@ -244,10 +261,10 @@ static game_params *custom_params(const config_item *cfg)
 
 static const char *validate_params(const game_params *params, bool full)
 {
-    if (params->n_base < 12)
-        return "Number of base graph points must be at least 12";
-    if (params->n_min < 5)
-        return "Number of minor points must be at least 5";
+    if (params->n_base < DEFAULT_N_BASE)
+        return "Number of base graph points is too low";
+    if (params->n_min < DEFAULT_N_MIN)
+        return "Number of minor points is too low";
     /*
      * TODO:
      * If we experience performance issues we could also think of an upper limit
@@ -979,7 +996,7 @@ static char *new_game_desc(const game_params *params, random_state *rs,
             for (k = 0; k < tmp2 + tmp3; k++)
             {
                 pt = pts_base + k;
-                if (squarert(square(pt->x - x) + square(pt->y - y)) < (2 * POINTRADIUS) + 2)
+                if (square(pt->x - x) + square(pt->y - y) < square((2 * POINTRADIUS) + 2))
                     goto next_coord_y; /* the point overlays another point => next y-coordinate */
             }
             pt = pts_base + (tmp2 + tmp3++);
@@ -1153,7 +1170,7 @@ static const char* validate_graph(const char** desc, int n, long lim, long mar)
         idx = atoi(*desc);
         if(idx < 0 || idx >= n)
             return "Point index out of range in game description";
-        while (**desc && isdigit((unsigned char) (**desc))) (*desc)++;
+        while (**desc && isdigit((uint8) (**desc))) (*desc)++;
 
         if (**desc != '-')
             return "Expected '-' after point index in game description";
@@ -1162,7 +1179,7 @@ static const char* validate_graph(const char** desc, int n, long lim, long mar)
         x = atol(*desc);
         if (x < mar || x > lim)
             return "X-coordinate out of range in game description";
-        while (**desc && isdigit((unsigned char) (**desc))) (*desc)++;
+        while (**desc && isdigit((uint8) (**desc))) (*desc)++;
 
         if (**desc != '-')
             return "Expected '-' after point index in game description";
@@ -1171,7 +1188,7 @@ static const char* validate_graph(const char** desc, int n, long lim, long mar)
         y = atol(*desc);
         if (y < mar || y > lim)
             return "Y-coordinate out of range in game description";
-        while (**desc && isdigit((unsigned char) (**desc))) (*desc)++;
+        while (**desc && isdigit((uint8) (**desc))) (*desc)++;
 
         if (**desc != ',' && **desc != ';')
             return "Expected ',' or ';' after y-coordinate in game description";
@@ -1182,7 +1199,7 @@ static const char* validate_graph(const char** desc, int n, long lim, long mar)
         src = atoi(*desc);
         if (src < 0 || src >= n)
             return "Edge source index out of range in game description";
-        while (**desc && isdigit((unsigned char) (**desc))) (*desc)++;
+        while (**desc && isdigit((uint8) (**desc))) (*desc)++;
 
         if (**desc != '-')
             return "Expected '-' after edge source index in game description";
@@ -1191,7 +1208,7 @@ static const char* validate_graph(const char** desc, int n, long lim, long mar)
         tgt = atoi(*desc);
         if (tgt < 0 || tgt >= n)
             return "Edge target index out of range in game description";
-        while (**desc && isdigit((unsigned char) (**desc))) (*desc)++;
+        while (**desc && isdigit((uint8) (**desc))) (*desc)++;
 
         if (**desc != ',' && **desc != ';')
             return "Expected ',' or ';' after edge target in game description";
@@ -1229,32 +1246,31 @@ static graph* parse_graph(const char** desc, enum grid grid, int n, long lim, lo
     point* pt;
     graph* ret = snew(graph);
     ret->refcount = 1;
-    ret->cpycount = snew(int);
-    *ret->cpycount = 1;
     ret->grid = grid;
     ret->points = snewn(n, point);
     ret->idcs = snewn(n, int);
     ret->indices = newtree234(intcmp);
     ret->edges = newtree234(edgecmp);
+    ret->iscpy = false;
     do
     {
         idx = atoi(*desc);
         assert(idx >= 0 && idx < n);
-        while (**desc && isdigit((unsigned char) (**desc))) (*desc)++;
+        while (**desc && isdigit((uint8) (**desc))) (*desc)++;
 
         assert(**desc == '-');
         (*desc)++;
 
         x = atol(*desc);
         assert(x >= mar && x <= lim);
-        while (**desc && isdigit((unsigned char) (**desc))) (*desc)++;
+        while (**desc && isdigit((uint8) (**desc))) (*desc)++;
 
         assert(**desc == '-');
         (*desc)++;
 
         y = atol(*desc);
         assert(y >= mar && y <= lim);
-        while (**desc && isdigit((unsigned char) (**desc))) (*desc)++;
+        while (**desc && isdigit((uint8) (**desc))) (*desc)++;
 
         pt = ret->points + idx;
         pt->x = x;
@@ -1272,14 +1288,14 @@ static graph* parse_graph(const char** desc, enum grid grid, int n, long lim, lo
     {
         src = atoi(*desc);
         assert(src >= 0 && src < n);
-        while (**desc && isdigit((unsigned char) (**desc))) (*desc)++;
+        while (**desc && isdigit((uint8) (**desc))) (*desc)++;
 
         assert(**desc == '-');
         (*desc)++;
 
         tgt = atoi(*desc);
         assert(tgt >= 0 && tgt < n);
-        while (**desc && isdigit((unsigned char) (**desc))) (*desc)++;
+        while (**desc && isdigit((uint8) (**desc))) (*desc)++;
 
         addedge(ret->edges, src, tgt);
 
@@ -1302,36 +1318,38 @@ static game_state *new_game(midend *me, const game_params *params,
     state->base = parse_graph(&_desc, GRID_RIGHT, params->n_base, g_size - g_margin, g_margin);
     state->solved = false;
     state->cheated = false;
+    state->lost = false;
 
     return state;
 }
 
 /*
- * Duplicate a graph structure. Set its refcount to 1 and increment its copycount.
+ * Copy a single edge
+ */
+static void* edgecpy(void* state, void* elem)
+{
+    edge* e = (edge*) elem;
+    edge* ecpy = snew(edge);
+    *ecpy = *e;
+    
+    return (void*) ecpy;
+}
+
+/*
+ * Duplicate a graph structure. The duplicates refcount will be 1 and it will be
+ * marked as copy.
  */
 static graph* dup_graph(const graph* gr)
 {
-    int i;
-    int* ix;
-    edge* e;
-    edge* ecpy;
     graph* ret = snew(graph);
 
     ret->refcount = 1;
-    ret->cpycount = gr->cpycount;
-    (*ret->cpycount)++;
     ret->grid = gr->grid;
     ret->points = gr->points;
     ret->idcs = gr->idcs;
-    ret->indices = newtree234(intcmp);
-    for (i = 0; (ix = index234(gr->indices, i)) != NULL; i++) add234(ret->indices, ix);
-    ret->edges = newtree234(edgecmp);
-    for (i = 0; (e = index234(gr->edges, i)) != NULL; i++)
-    {
-        ecpy = snew(edge);
-        *ecpy = *e;
-        add234(ret->edges, ecpy);
-    }
+    ret->indices = copytree234(gr->indices, NULL, NULL);
+    ret->edges = copytree234(gr->edges, edgecpy, NULL);
+    ret->iscpy = true;
 
     return ret;
 }
@@ -1341,29 +1359,29 @@ static game_state *dup_game(const game_state *state)
     game_state *ret = snew(game_state);
 
     ret->params = state->params;
-    ret->minor = dup_graph(state->minor);
+    ret->minor = state->minor;
+    ret->minor->refcount++;
     ret->base = dup_graph(state->base);
     ret->solved = state->solved;
     ret->cheated = state->cheated;
+    ret->lost = state->lost;
 
     return ret;
 }
 
 /*
  * Free the memory that points to a graph structure if its refcount is equal to or
- * smaller than 0. If its cpycount is equal to or smaller than 0 also free the point
- * array and the vertex and edge 234-trees.
+ * smaller than 0. If it hasn't been created by duplicating another graph also free
+ * the point array and the vertex and edge 234-trees.
  */
-static void free_graph(graph* gr, bool iscpy)
+static void free_graph(graph* gr)
 {
     edge* e;
-    if (iscpy) (*gr->cpycount)--;
     (gr->refcount)--;
     if (gr->refcount <= 0)
     {
-        if (*gr->cpycount <= 0)
+        if (!gr->iscpy)
         {
-            sfree(gr->cpycount);
             sfree(gr->points);
             sfree(gr->idcs);
         }
@@ -1376,8 +1394,8 @@ static void free_graph(graph* gr, bool iscpy)
 
 static void free_game(game_state *state)
 {
-    free_graph(state->base, true);
-    free_graph(state->minor, true);
+    free_graph(state->base);
+    free_graph(state->minor);
     sfree(state);
 }
 
@@ -1385,54 +1403,45 @@ static void free_game(game_state *state)
  * Replace the given edge in the given edge 234-tree. The new edge will have
  * new_src and new_tgt as source and target respetively.
  */
-/*static void replace_edge(tree234* edges, edge* e, int new_src, int new_tgt)
+static void replace_edge(tree234* edges, edge* e, int new_src, int new_tgt)
 {
     del234(edges, e);
 
-    if (new_src == new_tgt)
+    if (new_src != new_tgt && !isedge(edges, new_src, new_tgt))
     {
-        sfree(e);
+        e->src = min(new_src, new_tgt);
+        e->tgt = max(new_src, new_tgt);
+        add234(edges, e);
     }
     else
     {
-        int s = min(new_src, new_tgt);
-        int t = max(new_src, new_tgt);
-        e->src = s;
-        e->tgt = t;
-        if (find234(edges, e, NULL) == NULL)
-            add234(edges, e);
-        else
-            sfree(e);
+        sfree(e);
     }
-}*/
-
+}
 
 /* 
  * Contract an edge from a graph, i.e. merge its incident vertices such that
  * no edges are lost except for the contracted edge itself.
  */
-/*static void contract_edge(graph* graph, int src, int tgt)
+static void contract_edge(graph* graph, int dom, int rec)
 {
     int i;
-    int s, t;
     edge* e;
-
-    assert(src != tgt);
-    assert(isedge(graph->edges, src, tgt));
-
-    s = min(src, tgt);
-    t = max(src, tgt);
+    edge* ecpy;
+    tree234* edgescpy = copytree234(graph->edges, edgecpy, NULL);
      
     for (i = 0; (e = index234(graph->edges, i)) != NULL; i++)
     {
-        if (t == e->src)
-            replace_edge(graph->edges, e, s, e->tgt);
-        else if (t == e->tgt)
-            replace_edge(graph->edges, e, e->src, s);
+        ecpy = find234(edgescpy, e, edgecmp);
+        if (rec == ecpy->src)
+            replace_edge(edgescpy, ecpy, dom, ecpy->tgt);
+        else if (rec == ecpy->tgt)
+            replace_edge(edgescpy, ecpy, ecpy->src, dom);
     }
 
-    del234(graph->indices, graph->idcs + t);
-}*/
+    del234(graph->indices, graph->idcs + rec);
+    graph->edges = edgescpy;
+}
 
 static char *solve_game(const game_state *state, const game_state *currstate,
                         const char *aux, const char **error)
@@ -1500,29 +1509,108 @@ static void decode_ui(game_ui *ui, const char *encoding)
 static void game_changed_state(game_ui *ui, const game_state *oldstate,
                                const game_state *newstate)
 {
+    if (!ui->just_merged) return;
     ui->mergept_dom = -1;
     ui->mergept_rec = -1;
+    ui->just_merged = false;
 }
 
 struct game_drawstate {
 
     int tilesize;
 
-    graph* base;
-    graph* minor;
-
 };
+
+#define MOUSEPOS_TRESHOLD (POINTRADIUS + 2)
 
 static char *interpret_move(const game_state *state, game_ui *ui,
                             const game_drawstate *ds,
                             int x, int y, int button)
 {
+    if (IS_MOUSE_DOWN(button))
+    {
+        int i;
+        int opt_idx;
+        int* ix;
+        long sq_dist;
+        long sq_opt_dist = square(MOUSEPOS_TRESHOLD);
+        point* pt;
+
+        /*
+         * Get the index of the point with the shortest distance to the coordinates
+         * of the mouse click. Do only take points into account with a distance smaller
+         * than MOUSEPOS_TRESHOLD.
+         */
+        x -= state->base->grid * ui->g_size;
+        for (i = 0; (ix = (int*) index234(state->base->indices, i)) != NULL; i++)
+        {
+            pt = state->base->points + (*ix);
+            sq_dist = square(pt->x - x) + square(pt->y - y);
+            if (sq_dist < sq_opt_dist)
+            {
+                sq_opt_dist = sq_dist;
+                opt_idx = *ix;
+            }
+        }
+
+        /*
+         * Check whether there is any point with a distance smaller than the treshold.
+         * If yes, either update the game_ui or make a move, otherwise do nothing.
+         */
+        if (sq_opt_dist < square(MOUSEPOS_TRESHOLD))
+        {
+            if (ui->mergept_rec == -1)
+            {
+                ui->mergept_rec = opt_idx;
+                return UI_UPDATE;
+            }
+            else if (ui->mergept_dom == -1)
+            {
+                if (ui->mergept_rec == opt_idx)
+                {
+                    ui->mergept_rec = -1;
+                    return UI_UPDATE;
+                }
+                else if (isedge(state->base->edges, opt_idx, ui->mergept_rec))
+                {
+                    char buf[80];
+                    ui->mergept_dom = opt_idx;
+                    ui->just_merged = true;
+                    sprintf(buf, "d%d-r%d", ui->mergept_dom, ui->mergept_rec);
+                    return dupstr(buf);
+                }
+            }
+        }
+    }
+
     return NULL;
 }
 
 static game_state *execute_move(const game_state *state, const char *move)
 {
-    return NULL;
+    int dom, rec;
+
+    /* Parse the move description. Return NULL if it is incorrect. */
+    if (*move != 'd') return NULL;
+    move++;
+    if (!(*move || isdigit((uint8) *move))) return NULL;
+    dom = atoi(move);
+    while(*move && isdigit((uint8) *move)) move++;
+    if (*move != '-') return NULL;
+    move++;
+    if (*move != 'r') return NULL;
+    move++;
+    if (!(*move || isdigit((uint8) *move))) return NULL;
+    rec = atoi(move);
+
+    /* Return NULL if the move is invalid */
+    if (dom == rec || !isedge(state->base->edges, dom, rec)) return NULL;
+
+    /* Copy the current game state and contract the edge between dom and rec */
+    game_state* ret = dup_game(state);
+    contract_edge(ret->base, dom, rec);
+
+    return ret;
 }
 
 /* ----------------------------------------------------------------------
@@ -1549,7 +1637,7 @@ static float *game_colours(frontend *fe, int *ncolours)
 
     frontend_default_colour(fe, &ret[COL_BACKGROUND * 3]);
 
-    /* black */
+    /* dark grey */
     ret[(COL_OUTLINE * 3) + 0] = 0.3F;
     ret[(COL_OUTLINE * 3) + 1] = 0.3F;
     ret[(COL_OUTLINE * 3) + 2] = 0.3F;
@@ -1590,9 +1678,14 @@ static float *game_colours(frontend *fe, int *ncolours)
     ret[(COL_CONTREDGE * 3) + 2] = 0.5F;
 
     /* white */
-    ret[(COL_FLASH * 3) + 0] = 1.0F;
-    ret[(COL_FLASH * 3) + 1] = 1.0F;
-    ret[(COL_FLASH * 3) + 2] = 1.0F;
+    ret[(COL_SOLVEFLASH * 3) + 0] = 1.0F;
+    ret[(COL_SOLVEFLASH * 3) + 1] = 1.0F;
+    ret[(COL_SOLVEFLASH * 3) + 2] = 1.0F;
+
+    /* light red */
+    ret[(COL_LOSEFLASH * 3) + 0] = 1.0F;
+    ret[(COL_LOSEFLASH * 3) + 1] = 0.3F;
+    ret[(COL_LOSEFLASH * 3) + 2] = 0.3F;
 
     /* black */
     ret[(COL_TEXT * 3) + 0] = 0.1F;
@@ -1608,18 +1701,12 @@ static game_drawstate *game_new_drawstate(drawing *dr, const game_state *state)
     struct game_drawstate *ds = snew(struct game_drawstate);
 
     ds->tilesize = COORDUNIT;
-    ds->base = state->base;
-    (ds->base->refcount)++;
-    ds->minor = state->minor;
-    (ds->minor->refcount)++;
 
     return ds;
 }
 
 static void game_free_drawstate(drawing *dr, game_drawstate *ds)
 {
-    free_graph(ds->minor, false);
-    free_graph(ds->base, false);
     sfree(ds);
 }
 
@@ -1629,12 +1716,25 @@ static void game_redraw(drawing *dr, game_drawstate *ds,
                         float animtime, float flashtime)
 {
     int i;
-    int idx;
+    int bg_color;
+    int* ix;
     long x_off;
     edge* e;
     point* esrc;
     point* etgt;
     point* pts;
+
+    /*
+     * Check whether game has been recently solved and solve function
+     * hasn't been used.
+     */
+    if (state->solved && !oldstate->solved && !state->cheated)
+        bg_color = COL_SOLVEFLASH;
+    /* Check whether the game has been recently lost */
+    else if (state->lost && !oldstate->lost)
+        bg_color = COL_LOSEFLASH;
+    else
+        bg_color = COL_BACKGROUND;
     
     /*
      * The initial contents of the window are not guaranteed and
@@ -1642,44 +1742,55 @@ static void game_redraw(drawing *dr, game_drawstate *ds,
      * should start by drawing a big background-colour rectangle
      * covering the whole window.
      */
-    draw_rect(dr, 0, 0, ui->width, ui->height, COL_BACKGROUND);
+    draw_rect(dr, 0, 0, ui->width, ui->height, bg_color);
 
+    /*
+     * Draw an outline around the area where the game is drawn and
+     * separate the two grids for the base graph and minor by a thick
+     * line.
+     */
     draw_rect_outline(dr, 0, 0, ui->width, ui->height, COL_OUTLINE);
     draw_thick_line(dr, 2.0F, (float) ui->g_size, 0.0F, (float) ui->g_size,
-                    (float) ui->g_size, COL_GRIDBORDER);
+                        (float) ui->g_size, COL_GRIDBORDER);
+    /*
+     * Draw texts that make clear which of the two grids belongs to
+     * the base graph and which to the minor.
+     */
     draw_text(dr, ui->g_size / 2, ui->g_margin / 2, FONT_FIXED, ui->g_margin / 2,
                 ALIGN_VCENTRE | ALIGN_HCENTRE, COL_TEXT, "MINOR");
-    draw_text(dr, ui->g_size + (ui->g_size / 2), ui->g_margin / 2, FONT_FIXED, ui->g_margin / 2,
-                ALIGN_VCENTRE | ALIGN_HCENTRE, COL_TEXT, "ORIGINAL");
+    draw_text(dr, ui->g_size + (ui->g_size / 2), ui->g_margin / 2, FONT_FIXED,
+                ui->g_margin / 2, ALIGN_VCENTRE | ALIGN_HCENTRE, COL_TEXT, "ORIGINAL");
 
-    pts = ds->base->points;
-    x_off = ds->base->grid * ui->g_size;
-    for (i = 0; (e = index234(ds->base->edges, i)) != NULL; i++)
+    /* Draw the minor edges in the intended grid */
+    pts = state->minor->points;
+    x_off = state->minor->grid * ui->g_size;
+    for (i = 0; (e = index234(state->minor->edges, i)) != NULL; i++)
     {
         esrc = pts + e->src;
         etgt = pts + e->tgt;
         draw_line(dr, esrc->x + x_off, esrc->y, etgt->x + x_off, etgt->y, COL_EDGE);
     }
-    for (i = 0; index234(ds->base->indices, i) != NULL; i++)
+    /* Draw the minor points in the intended grid */
+    for (i = 0; (ix = (int*) index234(state->minor->indices, i)) != NULL; i++)
     {
-        idx = *((int*) index234(ds->base->indices, i));
-        draw_circle(dr, pts[idx].x + x_off, pts[idx].y, POINTRADIUS,
-                    COL_BASEPOINT, COL_POINTOUTLINE);
+        draw_circle(dr, pts[*ix].x + x_off, pts[*ix].y, POINTRADIUS, COL_MINORPOINT,
+                    COL_POINTOUTLINE);
     }
 
-    pts = ds->minor->points;
-    x_off = ds->minor->grid * ui->g_size;
-    for (i = 0; (e = index234(ds->minor->edges, i)) != NULL; i++)
+    /* Draw the base graph edges in the intended grid */
+    pts = state->base->points;
+    x_off = state->base->grid * ui->g_size;
+    for (i = 0; (e = index234(state->base->edges, i)) != NULL; i++)
     {
         esrc = pts + e->src;
         etgt = pts + e->tgt;
         draw_line(dr, esrc->x + x_off, esrc->y, etgt->x + x_off, etgt->y, COL_EDGE);
     }
-    for (i = 0; index234(ds->minor->indices, i) != NULL; i++)
+    /* Draw the base graph points in the intended grid */
+    for (i = 0; (ix = (int*) index234(state->base->indices, i)) != NULL; i++)
     {
-        idx = *((int*) index234(ds->minor->indices, i));
-        draw_circle(dr, pts[idx].x + x_off, pts[idx].y, POINTRADIUS,
-                    COL_MINORPOINT, COL_POINTOUTLINE);
+        draw_circle(dr, pts[*ix].x + x_off, pts[*ix].y, POINTRADIUS, (*ix == ui->mergept_rec) ?
+                    COL_MERGEPOINT : COL_BASEPOINT, COL_POINTOUTLINE);
     }
 
     draw_update(dr, 0, 0, ui->width, ui->height);
@@ -1694,7 +1805,17 @@ static float game_anim_length(const game_state *oldstate,
 static float game_flash_length(const game_state *oldstate,
                                const game_state *newstate, int dir, game_ui *ui)
 {
-    return 0.0F;
+    /*
+     * Check whether game has been recently solved and solve function
+     * hasn't been used.
+     */
+    if (newstate->solved && !oldstate->solved && !newstate->cheated)
+        return 0.3F;
+    /* Check whether the game has been recently lost */
+    else if (newstate->lost && !oldstate->lost)
+        return 0.3F;
+    else
+        return 0.0F;
 }
 
 static int game_status(const game_state *state)
