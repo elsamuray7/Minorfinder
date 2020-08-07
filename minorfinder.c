@@ -1348,6 +1348,10 @@ static graph* dup_graph(const graph* gr)
     ret->points = gr->points;
     ret->idcs = gr->idcs;
     ret->indices = copytree234(gr->indices, NULL, NULL);
+    /*
+     * I don't exactly know why but the game crashes when we don't copy the whole
+     * 234-tree including its elements at this point.
+     */
     ret->edges = copytree234(gr->edges, edgecpy, NULL);
     ret->iscpy = true;
 
@@ -1527,6 +1531,13 @@ static char *interpret_move(const game_state *state, game_ui *ui,
                             const game_drawstate *ds,
                             int x, int y, int button)
 {
+    /*
+     * Since one can only perform moves on the base graph which is placed in GRID_RIGHT
+     * and the point coordinates of a graph are given in relation to its grid one needs
+     * to subtract the grid size from the x-coordinate of the mouse event.
+     */
+    x -= state->base->grid * ui->g_size;
+
     if (IS_MOUSE_DOWN(button))
     {
         int i;
@@ -1541,7 +1552,6 @@ static char *interpret_move(const game_state *state, game_ui *ui,
          * of the mouse click. Do only take points into account with a distance smaller
          * than MOUSEPOS_TRESHOLD.
          */
-        x -= state->base->grid * ui->g_size;
         for (i = 0; (ix = (int*) index234(state->base->indices, i)) != NULL; i++)
         {
             pt = state->base->points + (*ix);
@@ -1573,13 +1583,38 @@ static char *interpret_move(const game_state *state, game_ui *ui,
                 }
                 else if (isedge(state->base->edges, opt_idx, ui->mergept_rec))
                 {
-                    char buf[80];
                     ui->mergept_dom = opt_idx;
-                    ui->just_merged = true;
-                    sprintf(buf, "d%d-r%d", ui->mergept_dom, ui->mergept_rec);
-                    return dupstr(buf);
+                    return UI_UPDATE;
                 }
             }
+        }
+    }
+    else if (IS_MOUSE_RELEASE(button))
+    {
+        /*
+         * Check whether both, dominant and recessive merge point have already been
+         * selected.
+         */
+        if (ui->mergept_rec != -1 && ui->mergept_dom != -1)
+        {
+            if (x < 0 || x > ui->g_size || y < 0 || y > ui->g_size)
+            {
+                ui->mergept_dom = -1;
+                return UI_UPDATE;
+            }
+            else if (isedge(state->base->edges, ui->mergept_dom, ui->mergept_rec))
+            {
+                char buf[80];
+                ui->just_merged = true;
+                sprintf(buf, "d%d-r%d", ui->mergept_dom, ui->mergept_rec);
+                return dupstr(buf);
+            }
+            else
+            {
+                ui->mergept_dom = -1;
+                return UI_UPDATE;
+            }
+            
         }
     }
 
@@ -1789,7 +1824,8 @@ static void game_redraw(drawing *dr, game_drawstate *ds,
     /* Draw the base graph points in the intended grid */
     for (i = 0; (ix = (int*) index234(state->base->indices, i)) != NULL; i++)
     {
-        draw_circle(dr, pts[*ix].x + x_off, pts[*ix].y, POINTRADIUS, (*ix == ui->mergept_rec) ?
+        draw_circle(dr, pts[*ix].x + x_off, pts[*ix].y, POINTRADIUS,
+                    (*ix == ui->mergept_dom || *ix == ui->mergept_rec) ?
                     COL_MERGEPOINT : COL_BASEPOINT, COL_POINTOUTLINE);
     }
 
