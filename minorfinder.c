@@ -36,7 +36,7 @@ enum {
     COL_GRIDBORDER,
     COL_BASEPOINT,
     COL_MINORPOINT,
-    COL_MERGEPOINT,
+    COL_DRAGPOINT,
     COL_POINTOUTLINE,
     COL_EDGE,
     COL_CONTREDGE,
@@ -1443,6 +1443,8 @@ static void contract_edge(graph* graph, int dom, int rec)
             replace_edge(edgescpy, ecpy, ecpy->src, dom);
     }
 
+    graph->points[dom].x += (graph->points[rec].x - graph->points[dom].x) / 2;
+    graph->points[dom].y += (graph->points[rec].y - graph->points[dom].y) / 2;
     del234(graph->indices, graph->idcs + rec);
     graph->edges = edgescpy;
 }
@@ -1473,10 +1475,17 @@ struct game_ui {
     /* game window size */
     long width, height;
 
-    /* index of the resulting point of the points merge - the dominant point */
+    /* new position of the drag point */
+    point newpt;
+    /* index of the drag point */
+    int dragpt;
+
+    /* index of the resulting point of the merge - the dominant point */
     int mergept_dom;
     /* index of the recessive point */
     int mergept_rec;
+
+    bool just_dragged;
 
     bool just_merged;
 
@@ -1489,8 +1498,11 @@ static game_ui *new_ui(const game_state *state)
     ret->g_margin = COORDMARGIN_BASE * COORDUNIT;
     ret->width = NGRIDS * ret->g_size;
     ret->height = ret->g_size;
+    ret->newpt.d = 1;
+    ret->dragpt = -1;
     ret->mergept_dom = -1;
     ret->mergept_rec = -1;
+    ret->just_dragged = false;
     ret->just_merged = false;
 
     return ret;
@@ -1513,10 +1525,19 @@ static void decode_ui(game_ui *ui, const char *encoding)
 static void game_changed_state(game_ui *ui, const game_state *oldstate,
                                const game_state *newstate)
 {
-    if (!ui->just_merged) return;
-    ui->mergept_dom = -1;
-    ui->mergept_rec = -1;
-    ui->just_merged = false;
+    /**/printf("state change\n");
+    
+    if (ui->just_dragged)
+    {
+        ui->dragpt = -1;
+        ui->just_dragged = false;
+    }
+    else if (ui->just_merged)
+    {
+        ui->mergept_dom = -1;
+        ui->mergept_rec = -1;
+        ui->just_merged = false;
+    }
 }
 
 struct game_drawstate {
@@ -1525,12 +1546,30 @@ struct game_drawstate {
 
 };
 
-#define MOUSEPOS_TRESHOLD (POINTRADIUS + 2)
+#define POINT_TRESHOLD square(POINTRADIUS + 2)
+#define EDGE_TRESHOLD 8
+
+/* heuristic to determine whether a point has been clicked */
+#define point_heuristic(px, py, cx, cy) (square((px) - (cx)) + square((py) - (cy)))
+
+/*
+ * Heuristic to determine whether an edge has been clicked
+ */
+static double edge_heuristic(long esx, long esy, long etx, long ety,
+                            long cx, long cy)
+{
+    long dist_st = squarert(square(etx - esx) + square(ety - esy));
+    long dist_sc = squarert(square(cx - esx) + square(cy - esy));
+    long dist_ct = squarert(square(etx - cx) + square(ety - cy));
+    return dist_sc + dist_ct - dist_st;
+}
 
 static char *interpret_move(const game_state *state, game_ui *ui,
                             const game_drawstate *ds,
                             int x, int y, int button)
 {
+    /**/printf("interpret\n");
+    
     /*
      * Since one can only perform moves on the base graph which is placed in GRID_RIGHT
      * and the point coordinates of a graph are given in relation to its grid one needs
@@ -1541,80 +1580,129 @@ static char *interpret_move(const game_state *state, game_ui *ui,
     if (IS_MOUSE_DOWN(button))
     {
         int i;
-        int opt_idx;
+        int best_ptidx = -1;
         int* ix;
-        long sq_dist;
-        long sq_opt_dist = square(MOUSEPOS_TRESHOLD);
+        long ptheur;
+        long best_ptheur = POINT_TRESHOLD;
+        double eheur;
+        double best_eheur = EDGE_TRESHOLD;
         point* pt;
+        point* pts;
+        edge beste;
+        edge* e;
+        beste.src = -1;
+        beste.tgt = -1;
 
         /*
-         * Get the index of the point with the shortest distance to the coordinates
-         * of the mouse click. Do only take points into account with a distance smaller
-         * than MOUSEPOS_TRESHOLD.
+         * Get the index of the point with the shortest point heuristic. Do only take points
+         * into account with a heuristic smaller than square(POINT_TRESHOLD).
          */
+        pts = state->base->points;
         for (i = 0; (ix = (int*) index234(state->base->indices, i)) != NULL; i++)
         {
-            pt = state->base->points + (*ix);
-            sq_dist = square(pt->x - x) + square(pt->y - y);
-            if (sq_dist < sq_opt_dist)
+            pt = pts + (*ix);
+            ptheur = point_heuristic(pt->x, pt->y, x, y);
+            if (ptheur < best_ptheur)
             {
-                sq_opt_dist = sq_dist;
-                opt_idx = *ix;
+                best_ptheur = ptheur;
+                best_ptidx = *ix;
             }
         }
 
         /*
-         * Check whether there is any point with a distance smaller than the treshold.
-         * If yes, either update the game_ui or make a move, otherwise do nothing.
+         * Get the index of the edge with the shortest edge heuristic. Do only take edges
+         * into account with a heuristic smaller than EDGE_HEURISTIC.
          */
-        if (sq_opt_dist < square(MOUSEPOS_TRESHOLD))
+        for (i = 0; (e = index234(state->base->edges, i)) != NULL; i++)
         {
-            if (ui->mergept_rec == -1)
+            eheur = edge_heuristic(pts[e->src].x, pts[e->src].y, pts[e->tgt].x,
+                                    pts[e->tgt].y, x, y);
+            if (eheur < best_eheur)
             {
-                ui->mergept_rec = opt_idx;
-                return UI_UPDATE;
+                best_eheur = eheur;
+                beste = *e;
             }
-            else if (ui->mergept_dom == -1)
-            {
-                if (ui->mergept_rec == opt_idx)
-                {
-                    ui->mergept_rec = -1;
-                    return UI_UPDATE;
-                }
-                else if (isedge(state->base->edges, opt_idx, ui->mergept_rec))
-                {
-                    ui->mergept_dom = opt_idx;
-                    return UI_UPDATE;
-                }
-            }
+        }
+
+        /* Check for an ongoing drag. If yes => game_ui requires update. */
+        if (ui->dragpt != -1)
+        {
+            ui->newpt.x = x;
+            ui->newpt.y = y;
+            return UI_UPDATE;
+        }
+        /*
+        * Check whether there is any point with a point heuristic smaller than the
+        * treshold. If yes => game_ui requires update.
+        */
+        else if (best_ptheur < POINT_TRESHOLD)
+        {
+            ui->newpt.x = x;
+            ui->newpt.y = y;
+            ui->dragpt = best_ptidx;
+            return UI_UPDATE;
+        }
+        /*
+         * Check whether there already is an edge selected. If yes => game_ui requires
+         * update.
+         */
+        else if (ui->mergept_rec != -1 && ui->mergept_dom != -1)
+        {
+            ui->mergept_rec = -1;
+            ui->mergept_dom = -1;
+            return UI_UPDATE;
+        }
+        /*
+         * There is no edge selected yet and at least one edge with an edge heuristic smaller
+         * than the treshold => game_ui requires update.
+         */
+        else if (best_eheur < EDGE_TRESHOLD)
+        {
+            ui->mergept_rec = beste.tgt;
+            ui->mergept_dom = beste.src;
+            return UI_UPDATE;
         }
     }
     else if (IS_MOUSE_RELEASE(button))
     {
         /*
-         * Check whether both, dominant and recessive merge point have already been
-         * selected.
+         * Check for an ongoing drag. If yes, check whether the player wants to discard
+         * the drag. If no => make move, else => discard and update game_ui.
          */
-        if (ui->mergept_rec != -1 && ui->mergept_dom != -1)
+        if (ui->dragpt != -1)
         {
             if (x < 0 || x > ui->g_size || y < 0 || y > ui->g_size)
             {
-                ui->mergept_dom = -1;
+                ui->dragpt = -1;
                 return UI_UPDATE;
-            }
-            else if (isedge(state->base->edges, ui->mergept_dom, ui->mergept_rec))
-            {
-                char buf[80];
-                ui->just_merged = true;
-                sprintf(buf, "d%d-r%d", ui->mergept_dom, ui->mergept_rec);
-                return dupstr(buf);
             }
             else
             {
+                char buf[80];
+                ui->just_dragged = true;
+                sprintf(buf, "d:%d-%d-%d", ui->dragpt, x, y);
+                return dupstr(buf);
+            }
+        }
+        /*
+         * Check for an ongoing contraction. If yes, check whether the player wants
+         * to discard the drag. If no => make move, else => discard and update game_ui.
+         */
+        else if (ui->mergept_rec != -1 && ui->mergept_dom != -1)
+        {
+            if (x < 0 || x > ui->g_size || y < 0 || y > ui->g_size)
+            {
+                ui->mergept_rec = -1;
                 ui->mergept_dom = -1;
                 return UI_UPDATE;
             }
-            
+            else
+            {
+                char buf[80];
+                ui->just_merged = true;
+                sprintf(buf, "c:%d-%d", ui->mergept_dom, ui->mergept_rec);
+                return dupstr(buf);
+            }
         }
     }
 
@@ -1623,27 +1711,70 @@ static char *interpret_move(const game_state *state, game_ui *ui,
 
 static game_state *execute_move(const game_state *state, const char *move)
 {
+    bool contr = false;
     int dom, rec;
+    int idx;
+    long x, y;
 
-    /* Parse the move description. Return NULL if it is incorrect. */
-    if (*move != 'd') return NULL;
-    move++;
-    if (!(*move || isdigit((uint8) *move))) return NULL;
-    dom = atoi(move);
-    while(*move && isdigit((uint8) *move)) move++;
-    if (*move != '-') return NULL;
-    move++;
-    if (*move != 'r') return NULL;
-    move++;
-    if (!(*move || isdigit((uint8) *move))) return NULL;
-    rec = atoi(move);
+    /**/printf("execute\n");
 
-    /* Return NULL if the move is invalid */
-    if (dom == rec || !isedge(state->base->edges, dom, rec)) return NULL;
+    /*
+     * Parse the move description. Return NULL if either the description is
+     * incorrect or the move is invalid.
+     */
+    if (*move == 'c') contr = true;
+    if (!contr && *move != 'd') return NULL;
+    move++;
+    if (*move != ':') return NULL;
+    move++;
+    if (contr)
+    {
+        if (!(*move || isdigit((uint8) *move))) return NULL;
+        dom = atoi(move);
+        while(*move && isdigit((uint8) *move)) move++;
+        if (*move != '-') return NULL;
+        move++;
+        if (!(*move || isdigit((uint8) *move))) return NULL;
+        rec = atoi(move);
 
-    /* Copy the current game state and contract the edge between dom and rec */
+        if (dom == rec || !isedge(state->base->edges, dom, rec)) return NULL;
+    }
+    else
+    {
+        long g_size;
+        
+        if (!(*move || isdigit((uint8) *move))) return NULL;
+        idx = atoi(move);
+        while(*move && isdigit((uint8) *move)) move++;
+        if (*move != '-') return NULL;
+        move++;
+        if (!(*move || isdigit((uint8) *move))) return NULL;
+        x = atol(move);
+        while(*move && isdigit((uint8) *move)) move++;
+        if (*move != '-') return NULL;
+        move++;
+        if (!(*move || isdigit((uint8) *move))) return NULL;
+        y = atol(move);
+
+        g_size = COORDLIMIT(state->params.n_base) * COORDUNIT;
+        if (idx >= state->params.n_base || x < 0 || x > g_size ||
+            y < 0 || y > g_size)
+            return NULL;
+    }
+
     game_state* ret = dup_game(state);
-    contract_edge(ret->base, dom, rec);
+
+    if (contr)
+    {
+        /* Contract the edge between dom and rec */
+        contract_edge(ret->base, dom, rec);
+    }
+    else
+    {
+        /* Assign the new coordinates to the dragged point */
+        ret->base->points[idx].x = x;
+        ret->base->points[idx].y = y;
+    }
 
     return ret;
 }
@@ -1693,9 +1824,9 @@ static float *game_colours(frontend *fe, int *ncolours)
     ret[(COL_MINORPOINT * 3) + 2] = 0.0F;
 
     /* green */
-    ret[(COL_MERGEPOINT * 3) + 0] = 0.0F;
-    ret[(COL_MERGEPOINT * 3) + 1] = 1.0F;
-    ret[(COL_MERGEPOINT * 3) + 2] = 0.0F;
+    ret[(COL_DRAGPOINT * 3) + 0] = 0.0F;
+    ret[(COL_DRAGPOINT * 3) + 1] = 1.0F;
+    ret[(COL_DRAGPOINT * 3) + 2] = 0.0F;
 
     /* black */
     ret[(COL_POINTOUTLINE * 3) + 0] = 0.0F;
@@ -1707,10 +1838,10 @@ static float *game_colours(frontend *fe, int *ncolours)
     ret[(COL_EDGE * 3) + 1] = 0.0F;
     ret[(COL_EDGE * 3) + 2] = 0.0F;
 
-    /* grey */
-    ret[(COL_CONTREDGE * 3) + 0] = 0.5F;
-    ret[(COL_CONTREDGE * 3) + 1] = 0.5F;
-    ret[(COL_CONTREDGE * 3) + 2] = 0.5F;
+    /* red */
+    ret[(COL_CONTREDGE * 3) + 0] = 1.0F;
+    ret[(COL_CONTREDGE * 3) + 1] = 0.0F;
+    ret[(COL_CONTREDGE * 3) + 2] = 0.0F;
 
     /* white */
     ret[(COL_SOLVEFLASH * 3) + 0] = 1.0F;
@@ -1758,6 +1889,8 @@ static void game_redraw(drawing *dr, game_drawstate *ds,
     point* esrc;
     point* etgt;
     point* pts;
+
+    /**/printf("redraw\n");
 
     /*
      * Check whether game has been recently solved and solve function
@@ -1819,14 +1952,16 @@ static void game_redraw(drawing *dr, game_drawstate *ds,
     {
         esrc = pts + e->src;
         etgt = pts + e->tgt;
-        draw_line(dr, esrc->x + x_off, esrc->y, etgt->x + x_off, etgt->y, COL_EDGE);
+        draw_line(dr, esrc->x + x_off, esrc->y, etgt->x + x_off, etgt->y,
+                    (e->tgt == ui->mergept_rec && e->src == ui->mergept_dom) ?
+                    COL_CONTREDGE : COL_EDGE);
     }
     /* Draw the base graph points in the intended grid */
     for (i = 0; (ix = (int*) index234(state->base->indices, i)) != NULL; i++)
     {
-        draw_circle(dr, pts[*ix].x + x_off, pts[*ix].y, POINTRADIUS,
-                    (*ix == ui->mergept_dom || *ix == ui->mergept_rec) ?
-                    COL_MERGEPOINT : COL_BASEPOINT, COL_POINTOUTLINE);
+        draw_circle(dr, ((*ix == ui->dragpt) ? ui->newpt.x : pts[*ix].x) + x_off,
+                    (*ix == ui->dragpt) ? ui->newpt.y : pts[*ix].y, POINTRADIUS,
+                    (*ix == ui->dragpt) ? COL_DRAGPOINT : COL_BASEPOINT, COL_POINTOUTLINE);
     }
 
     draw_update(dr, 0, 0, ui->width, ui->height);
