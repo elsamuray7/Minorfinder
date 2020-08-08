@@ -1339,13 +1339,14 @@ static void* edgecpy(void* state, void* elem)
  * Duplicate a graph structure. The duplicates refcount will be 1 and it will be
  * marked as copy.
  */
-static graph* dup_graph(const graph* gr)
+static graph* dup_graph(const graph* gr, int n)
 {
     graph* ret = snew(graph);
 
     ret->refcount = 1;
     ret->grid = gr->grid;
-    ret->points = gr->points;
+    ret->points = snewn(n, point);
+    memcpy(ret->points, gr->points, n * sizeof(point));
     ret->idcs = gr->idcs;
     ret->indices = copytree234(gr->indices, NULL, NULL);
     /*
@@ -1365,7 +1366,7 @@ static game_state *dup_game(const game_state *state)
     ret->params = state->params;
     ret->minor = state->minor;
     ret->minor->refcount++;
-    ret->base = dup_graph(state->base);
+    ret->base = dup_graph(state->base, state->params.n_base);
     ret->solved = state->solved;
     ret->cheated = state->cheated;
     ret->lost = state->lost;
@@ -1384,11 +1385,8 @@ static void free_graph(graph* gr)
     (gr->refcount)--;
     if (gr->refcount <= 0)
     {
-        if (!gr->iscpy)
-        {
-            sfree(gr->points);
-            sfree(gr->idcs);
-        }
+        if (!gr->iscpy) sfree(gr->idcs);
+        sfree(gr->points);
         freetree234(gr->indices);
         while((e = delpos234(gr->edges, 0)) != NULL) sfree(e);
         freetree234(gr->edges);
@@ -1525,8 +1523,6 @@ static void decode_ui(game_ui *ui, const char *encoding)
 static void game_changed_state(game_ui *ui, const game_state *oldstate,
                                const game_state *newstate)
 {
-    /**/printf("state change\n");
-    
     if (ui->just_dragged)
     {
         ui->dragpt = -1;
@@ -1568,8 +1564,6 @@ static char *interpret_move(const game_state *state, game_ui *ui,
                             const game_drawstate *ds,
                             int x, int y, int button)
 {
-    /**/printf("interpret\n");
-    
     /*
      * Since one can only perform moves on the base graph which is placed in GRID_RIGHT
      * and the point coordinates of a graph are given in relation to its grid one needs
@@ -1624,18 +1618,11 @@ static char *interpret_move(const game_state *state, game_ui *ui,
             }
         }
 
-        /* Check for an ongoing drag. If yes => game_ui requires update. */
-        if (ui->dragpt != -1)
-        {
-            ui->newpt.x = x;
-            ui->newpt.y = y;
-            return UI_UPDATE;
-        }
         /*
         * Check whether there is any point with a point heuristic smaller than the
         * treshold. If yes => game_ui requires update.
         */
-        else if (best_ptheur < POINT_TRESHOLD)
+        if (best_ptheur < POINT_TRESHOLD)
         {
             ui->newpt.x = x;
             ui->newpt.y = y;
@@ -1663,6 +1650,16 @@ static char *interpret_move(const game_state *state, game_ui *ui,
             return UI_UPDATE;
         }
     }
+    else if (IS_MOUSE_DRAG(button))
+    {
+        /* Check for an ongoing drag. If yes => game_ui requires update. */
+        if (ui->dragpt != -1)
+        {
+            ui->newpt.x = x;
+            ui->newpt.y = y;
+            return UI_UPDATE;
+        }
+    }
     else if (IS_MOUSE_RELEASE(button))
     {
         /*
@@ -1671,7 +1668,8 @@ static char *interpret_move(const game_state *state, game_ui *ui,
          */
         if (ui->dragpt != -1)
         {
-            if (x < 0 || x > ui->g_size || y < 0 || y > ui->g_size)
+            if (ui->newpt.x < 0 || ui->newpt.x > ui->g_size ||
+                ui->newpt.y < 0 || ui->newpt.y > ui->g_size)
             {
                 ui->dragpt = -1;
                 return UI_UPDATE;
@@ -1680,7 +1678,7 @@ static char *interpret_move(const game_state *state, game_ui *ui,
             {
                 char buf[80];
                 ui->just_dragged = true;
-                sprintf(buf, "d:%d-%d-%d", ui->dragpt, x, y);
+                sprintf(buf, "d:%d-%ld-%ld", ui->dragpt, ui->newpt.x, ui->newpt.y);
                 return dupstr(buf);
             }
         }
@@ -1715,8 +1713,6 @@ static game_state *execute_move(const game_state *state, const char *move)
     int dom, rec;
     int idx;
     long x, y;
-
-    /**/printf("execute\n");
 
     /*
      * Parse the move description. Return NULL if either the description is
@@ -1838,9 +1834,9 @@ static float *game_colours(frontend *fe, int *ncolours)
     ret[(COL_EDGE * 3) + 1] = 0.0F;
     ret[(COL_EDGE * 3) + 2] = 0.0F;
 
-    /* red */
+    /* orange */
     ret[(COL_CONTREDGE * 3) + 0] = 1.0F;
-    ret[(COL_CONTREDGE * 3) + 1] = 0.0F;
+    ret[(COL_CONTREDGE * 3) + 1] = 0.5F;
     ret[(COL_CONTREDGE * 3) + 2] = 0.0F;
 
     /* white */
@@ -1889,8 +1885,6 @@ static void game_redraw(drawing *dr, game_drawstate *ds,
     point* esrc;
     point* etgt;
     point* pts;
-
-    /**/printf("redraw\n");
 
     /*
      * Check whether game has been recently solved and solve function
@@ -1952,7 +1946,10 @@ static void game_redraw(drawing *dr, game_drawstate *ds,
     {
         esrc = pts + e->src;
         etgt = pts + e->tgt;
-        draw_line(dr, esrc->x + x_off, esrc->y, etgt->x + x_off, etgt->y,
+        draw_line(dr, ((ui->dragpt == e->src) ? ui->newpt.x : esrc->x) + x_off,
+                    (ui->dragpt == e->src) ? ui->newpt.y : esrc->y,
+                    ((ui->dragpt == e->tgt) ? ui->newpt.x : etgt->x) + x_off,
+                    (ui->dragpt == e->tgt) ? ui->newpt.y : etgt->y,
                     (e->tgt == ui->mergept_rec && e->src == ui->mergept_dom) ?
                     COL_CONTREDGE : COL_EDGE);
     }
