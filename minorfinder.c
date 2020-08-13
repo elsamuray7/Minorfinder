@@ -46,6 +46,9 @@ enum {
     COL_SOLVEFLASH,
     COL_LOSEFLASH,
     COL_TEXT,
+#ifdef DEBUG
+    COL_SUBPOINT,
+#endif
     NCOLOURS
 };
 
@@ -1893,6 +1896,13 @@ static float *game_colours(frontend *fe, int *ncolours)
     ret[(COL_TEXT * 3) + 1] = 0.1F;
     ret[(COL_TEXT * 3) + 2] = 0.1F;
 
+#ifdef DEBUG
+    /* cyan */
+    ret[(COL_SUBPOINT * 3) + 0] = 0.0F;
+    ret[(COL_SUBPOINT * 3) + 1] = 1.0F;
+    ret[(COL_SUBPOINT * 3) + 2] = 1.0F;
+#endif
+
     *ncolours = NCOLOURS;
     return ret;
 }
@@ -1997,7 +2007,15 @@ static void game_redraw(drawing *dr, game_drawstate *ds,
     {
         draw_circle(dr, ((*ix == ui->dragpt) ? ui->newpt.x : pts[*ix].x) + x_off,
                     (*ix == ui->dragpt) ? ui->newpt.y : pts[*ix].y, POINTRADIUS,
-                    (*ix == ui->dragpt) ? COL_DRAGPOINT : COL_BASEPOINT, COL_POINTOUTLINE);
+                    (*ix == ui->dragpt) ?
+                    COL_DRAGPOINT : 
+#ifdef DEBUG
+                    (*ix < state->params.n_min * (state->params.n_base / state->params.n_min)) ?
+                    COL_SUBPOINT : COL_BASEPOINT,
+#else
+                    COL_BASEPOINT,
+#endif
+                    COL_POINTOUTLINE);
     }
 
     draw_update(dr, 0, 0, ui->width, ui->height);
@@ -2069,16 +2087,16 @@ const struct game thegame = {
     encode_ui,
     decode_ui,
     NULL, /* game_request_keys */
-    game_changed_state,
-    interpret_move,
-    execute_move,
+    game_changed_state,                                                 /* done */
+    interpret_move,                                                     /* done */
+    execute_move,                                                       /* done */
     COORDUNIT, game_compute_size, game_set_size,                        /* done */
     game_colours,                                                       /* done */
     game_new_drawstate,                                                 /* done */
     game_free_drawstate,                                                /* done */
-    game_redraw,
+    game_redraw,                                                        /* done */
     game_anim_length,
-    game_flash_length,
+    game_flash_length,                                                  /* done */
     game_status,
     false, false, game_print_size, game_print,
     false,			       /* wants_statusbar */
