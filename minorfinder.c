@@ -21,6 +21,9 @@
 #include "puzzles.h"
 #include "tree234.h"
 
+/* debug mode */
+#define DEBUG
+
 /* type alias for an unsigned char */
 #define uint8 unsigned char
 
@@ -489,7 +492,9 @@ static void addedge(tree234 *edges, int s, int t)
 {
     edge *e = snew(edge);
 
+#ifdef DEBUG
     assert(s != t);
+#endif
 
     e->src = min(s, t);
     e->tgt = max(s, t);
@@ -501,7 +506,9 @@ static bool isedge(tree234 *edges, int s, int t)
 {
     edge e;
 
+#ifdef DEBUG
     assert(s != t);
+#endif
 
     e.src = min(s, t);
     e.tgt = max(s, t);
@@ -854,13 +861,8 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     edges_base_234 = newtree234(edgecmp);
 
     /*
-     * Add edges between the subgraphs such that if the subgraphs would be replaced
-     * by the minor points again the outcome would be the minor graph. Also make sure
-     * that the edges don't cross existing ones. Therefore we just iterate over all
-     * vertices of the source and target subgraph respectively until we find a non-
-     * corssing edge. This works because the circular areas in which the subgraphs
-     * lie don't intersect. Hence there must exist a non-corssing edge between two
-     * subgraphs if the corresponding minor points share an edge.
+     * Add edges to the subgraphs. Make sure that edges don't cross and the degree
+     * of the vertices does not increase beyond MAXDEGREE.
      */
     vtcs_base = snewn(n_base, vertex);
     for (i = 0; i < n_base; i++)
@@ -869,6 +871,42 @@ static char *new_game_desc(const game_params *params, random_state *rs,
         vx->idx = i;
         vx->deg = 0;
     }
+    for (i = 0; i < n_min; i++)
+    {
+        vtcs_234 = newtree234(vertcmp);
+        for (j = i * n_sub; j < (i + 1) * n_sub; j++)
+        {
+            add234(vtcs_234, vtcs_base + j);
+        }
+        tmp = n_sub;
+        while (tmp >= 2)
+        {
+            addedges(edges_base_234, vtcs_234, pts_base, n_min * n_sub, &tmp);
+        }
+        freetree234(vtcs_234);
+    }
+
+#ifdef DEBUG
+    /*
+     * Check whether all subgraph vertices are connected to another vertex of
+     * the same subgraph by at least one edge.
+     */
+    for (i = 0; i < n_min * n_sub; i++)
+    {
+        vx = vtcs_base + i;
+        assert(vx->deg > 0);
+    }
+#endif
+
+    /*
+     * Add edges between the subgraphs such that if the subgraphs would be replaced
+     * by the minor points again the outcome would be the minor graph. Also make sure
+     * that the edges don't cross existing ones. Therefore we just iterate over all
+     * vertices of the source and target subgraph respectively until we find a non-
+     * corssing edge. This works because the circular areas in which the subgraphs
+     * lie don't intersect. Hence there must exist a non-corssing edge between two
+     * subgraphs if the corresponding minor points share an edge.
+     */
     for (i = 0; (e = index234(edges_min_234, i)) != NULL; i++)
     {
         for (j = e->src * n_sub; j < (e->src + 1) * n_sub; j++)
@@ -927,25 +965,6 @@ static char *new_game_desc(const game_params *params, random_state *rs,
          * the loop to get the next edge.
          */
         next_edge:;
-    }
-
-    /*
-     * Add edges to the subgraphs. Make sure that edges don't cross and the degree
-     * of the vertices does not increase beyond MAXDEGREE.
-     */
-    for (i = 0; i < n_min; i++)
-    {
-        vtcs_234 = newtree234(vertcmp);
-        for (j = i * n_sub; j < (i + 1) * n_sub; j++)
-        {
-            add234(vtcs_234, vtcs_base + j);
-        }
-        tmp = n_sub;
-        while (tmp >= 2)
-        {
-            addedges(edges_base_234, vtcs_234, pts_base, n_min * n_sub, &tmp);
-        }
-        freetree234(vtcs_234);
     }
 
     /*
@@ -1255,21 +1274,31 @@ static graph* parse_graph(const char** desc, enum grid grid, int n, long lim, lo
     do
     {
         idx = atoi(*desc);
+#ifdef DEBUG
         assert(idx >= 0 && idx < n);
+#endif
         while (**desc && isdigit((uint8) (**desc))) (*desc)++;
 
+#ifdef DEBUG
         assert(**desc == '-');
+#endif
         (*desc)++;
 
         x = atol(*desc);
+#ifdef DEBUG
         assert(x >= mar && x <= lim);
+#endif
         while (**desc && isdigit((uint8) (**desc))) (*desc)++;
 
+#ifdef DEBUG
         assert(**desc == '-');
+#endif
         (*desc)++;
 
         y = atol(*desc);
+#ifdef DEBUG
         assert(y >= mar && y <= lim);
+#endif
         while (**desc && isdigit((uint8) (**desc))) (*desc)++;
 
         pt = ret->points + idx;
@@ -1281,25 +1310,35 @@ static graph* parse_graph(const char** desc, enum grid grid, int n, long lim, lo
         *ix = idx;
         add234(ret->indices, ix);
 
+#ifdef DEBUG
         assert(**desc == ',' || **desc == ';');
+#endif
     }
     while (*((*desc)++) != ';');
     do
     {
         src = atoi(*desc);
+#ifdef DEBUG
         assert(src >= 0 && src < n);
+#endif
         while (**desc && isdigit((uint8) (**desc))) (*desc)++;
 
+#ifdef DEBUG
         assert(**desc == '-');
+#endif
         (*desc)++;
 
         tgt = atoi(*desc);
+#ifdef DEBUG
         assert(tgt >= 0 && tgt < n);
+#endif
         while (**desc && isdigit((uint8) (**desc))) (*desc)++;
 
         addedge(ret->edges, src, tgt);
 
+#ifdef DEBUG
         assert(**desc == ',' || **desc == ';');
+#endif
     }
     while (*((*desc)++) != ';');
 
