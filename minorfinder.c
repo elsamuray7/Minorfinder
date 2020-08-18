@@ -61,8 +61,8 @@ enum {
 };
 
 enum default_params {
-    DEFAULT_N_BASE = 8,
-    DEFAULT_N_MIN = 3
+    DEFAULT_N_BASE = 11,
+    DEFAULT_N_MIN = 4
 };
 
 /*
@@ -185,12 +185,12 @@ static bool game_fetch_preset(int i, char **name, game_params **params)
             n_min = DEFAULT_N_MIN;
             break;
         case 1:
-            n_base = 11;
-            n_min = 4;
+            n_base = 14;
+            n_min = 5;
             break;
         case 2:
-            n_base = 15;
-            n_min = 4;
+            n_base = 17;
+            n_min = 6;
             break;
         default:
             return false;
@@ -1803,6 +1803,9 @@ static char *interpret_move(const game_state *state, game_ui *ui,
 
 typedef struct node node;
 
+/*
+ * A node of a graph isomorphism search tree
+ */
 struct node {
     node* children;
     vertex** cells;
@@ -1812,6 +1815,11 @@ struct node {
     bool isleaf;
 };
 
+/*
+ * Expand a node in an isomorphism search tree or if it is a leaf parse it
+ * into a permutation that is candidate to be an isomorphism between two
+ * graphs.
+ */
 static vertex* expand_node(node* n)
 {
     int i, j;
@@ -1885,6 +1893,10 @@ static vertex* expand_node(node* n)
     }
 }
 
+/*
+ * Free a node structure and all its child nodes recursively. Do only free
+ * the node itself if it is the root node of an isomorphism search tree.
+ */
 static void free_node(node* n, bool isroot)
 {
     int i;
@@ -1911,6 +1923,12 @@ static void free_node(node* n, bool isroot)
     }
 }
 
+/*
+ * Check whether there exists an isomorphism between a test graph and a
+ * comparison graph. The algorithm builds on the idea that vertices with
+ * different degree can't be a vertex pair of a permutation that is an
+ * isomorphism between two graphs.
+ */
 static bool find_isomorphism(const graph* the_graph, const graph* cmp_graph)
 {
     bool found;
@@ -1927,7 +1945,7 @@ static bool find_isomorphism(const graph* the_graph, const graph* cmp_graph)
     tree234* lifo;
     tree234* permus;
     
-    
+    /* Check whether the graphs have the same number of vertices */
     if (nvtcs != (tmp = count234(cmp_graph->vertices)))
     {
         LOG(("The graphs have different amounts of vertices (%d and %d)\n",
@@ -1935,7 +1953,7 @@ static bool find_isomorphism(const graph* the_graph, const graph* cmp_graph)
         return false;
     }
 
-    
+    /* Check whether the graphs have identical vertex degree distributions */
     vtcs_the = snewn(nvtcs, vertex);
     for (i = 0; (vx = index234(the_graph->vertices, i)) != NULL; i++)
     {
@@ -1964,7 +1982,19 @@ static bool find_isomorphism(const graph* the_graph, const graph* cmp_graph)
             tmp++;
     }
 
-    
+    /*
+     * Initiate a search tree by adding vertices with the same number of incident
+     * edges to the same cell of a node. Each vertex is unique in the union of all
+     * cells of a node and the union of all cells of a node must contain all vertices
+     * of the graph for which we create the search tree - the comparison graph.
+     * Then we refine for each node the cells that contain more than one vertex.
+     * Each refinement gives us another set of child nodes. We reach a leaf when we
+     * refine a node such that all cells of the arising child do only contain a single
+     * vertex. This means we just found a permutation for the comparison graph which
+     * could suit the test graph. If the permutation suits the test graph, i.e. if we
+     * apply it to the test graph and it turns out that the edge sets match, then we've
+     * found an isomorphism between the graphs.
+     */
     root = snew(node);
     root->ncells = tmp;
     root->cells = snewn(root->ncells, vertex*);
@@ -2031,6 +2061,12 @@ static bool find_isomorphism(const graph* the_graph, const graph* cmp_graph)
         int map[80];
         found = true;
         permu = index234(permus, i);
+        /*
+         * We don't need to check whether the test graph has additional edges that
+         * are missing in the comparison graph since we already compared the vertex
+         * degree distibutions of both graphs. Thus the sum of all vertex degrees
+         * must be equal for both graphs and the number of edges respectively.
+         */
         for (j = 0; j < nvtcs; j++)
         {
             map[permu[j].idx] = vtcs_the[j].idx;
@@ -2040,7 +2076,7 @@ static bool find_isomorphism(const graph* the_graph, const graph* cmp_graph)
             if (!isedge(the_graph->edges, map[e->src], map[e->tgt]))
             {
                 LOG(("Permutation %d is no isomorphism between the graphs,\n"\
-                    " missing edge %d-%d in one of the graphs", i, map[e->src],
+                    " missing edge %d-%d in the test graph", i, map[e->src],
                     map[e->tgt]));
                 found = false;
                 break;
