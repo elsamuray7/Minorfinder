@@ -24,6 +24,14 @@
 /* debug mode */
 #define DEBUG true
 
+#if DEBUG
+/* console log */
+#define LOG(x) (printf x)
+#else
+/* no log */
+#define LOG(x)
+#endif
+
 /* type alias for an unsigned char */
 #define uint8 unsigned char
 
@@ -43,8 +51,8 @@ enum {
     COL_POINTOUTLINE,
     COL_EDGE,
     COL_CONTREDGE,
-    COL_SOLVEFLASH,
-    COL_LOSEFLASH,
+    COL_FLASH,
+    COL_FLASH2,
     COL_TEXT,
 #if DEBUG
     COL_SUBPOINT,
@@ -127,9 +135,6 @@ typedef struct graph {
     /* 234-tree of edges - maps the current game state */
     tree234* edges;
 
-    /* indicates whether this graph has been created by duplicating another graph */
-    bool iscpy;
-
 } graph;
 
 struct game_params {
@@ -153,8 +158,6 @@ struct game_state {
     bool solved;
     /* player used solve function */
     bool cheated;
-    /* player lost game */
-    bool lost;
 
 };
 
@@ -548,6 +551,22 @@ static int vertcmpC(const void *av, const void *bv)
     if (a->deg > b->deg)
 	return -1;
     else if (a->deg < b->deg)
+	return +1;
+    else if (a->idx < b->idx)
+	return -1;
+    else if (a->idx > b->idx)
+	return +1;
+    return 0;
+}
+
+static int vertcmpC2(const void *av, const void *bv)
+{
+    const vertex *a = (vertex *)av;
+    const vertex *b = (vertex *)bv;
+    
+    if (a->deg < b->deg)
+	return -1;
+    else if (a->deg > b->deg)
 	return +1;
     else if (a->idx < b->idx)
 	return -1;
@@ -1270,7 +1289,6 @@ static graph* parse_graph(const char** desc, enum grid grid, int n, long lim, lo
     ret->vtcs = snewn(n, vertex);
     ret->vertices = newtree234(vertcmp);
     ret->edges = newtree234(edgecmp);
-    ret->iscpy = false;
     do
     {
         idx = atoi(*desc);
@@ -1366,7 +1384,6 @@ static game_state *new_game(midend *me, const game_params *params,
     state->base = parse_graph(&_desc, GRID_RIGHT, params->n_base, g_size - g_margin, g_margin);
     state->solved = false;
     state->cheated = false;
-    state->lost = false;
 
     return state;
 }
@@ -1384,25 +1401,41 @@ static void* edgecpy(void* state, void* elem)
 }
 
 /*
- * Duplicate a graph structure. The duplicates refcount will be 1 and it will be
- * marked as copy.
+ * Duplicate a graph structure. The duplicates refcount will be 1.
  */
 static graph* dup_graph(const graph* gr, int n)
 {
+    int i;
+    vertex* vx;
     graph* ret = snew(graph);
 
     ret->refcount = 1;
     ret->grid = gr->grid;
     ret->points = snewn(n, point);
     memcpy(ret->points, gr->points, n * sizeof(point));
-    ret->vtcs = gr->vtcs;
-    ret->vertices = copytree234(gr->vertices, NULL, NULL);
+    ret->vtcs = snewn(n, vertex);
+    memcpy(ret->vtcs, gr->vtcs, n * sizeof(vertex));
+#if DEBUG
+    for (i = 0; i < n; i++)
+    {
+        assert(ret->vtcs[i].idx == gr->vtcs[i].idx);
+        assert(ret->vtcs[i].idx == i);
+    }
+#endif
+    ret->vertices = newtree234(vertcmp);
+    for (i = 0; (vx = index234(gr->vertices, i)) != NULL; i++)
+    {
+#if DEBUG
+        assert(ret->vtcs[vx->idx].idx == gr->vtcs[vx->idx].idx);
+        assert(ret->vtcs[vx->idx].idx == vx->idx);
+#endif
+        add234(ret->vertices, ret->vtcs + vx->idx);
+    }
     /*
      * I don't exactly know why but the game crashes when we don't copy the whole
      * 234-tree including its elements at this point.
      */
     ret->edges = copytree234(gr->edges, edgecpy, NULL);
-    ret->iscpy = true;
 
     return ret;
 }
@@ -1417,15 +1450,13 @@ static game_state *dup_game(const game_state *state)
     ret->base = dup_graph(state->base, state->params.n_base);
     ret->solved = state->solved;
     ret->cheated = state->cheated;
-    ret->lost = state->lost;
 
     return ret;
 }
 
 /*
  * Free the memory that points to a graph structure if its refcount is equal to or
- * smaller than 0. If it hasn't been created by duplicating another graph also free
- * the point array and the vertex and edge 234-trees.
+ * smaller than 0.
  */
 static void free_graph(graph* gr)
 {
@@ -1433,8 +1464,8 @@ static void free_graph(graph* gr)
     (gr->refcount)--;
     if (gr->refcount <= 0)
     {
-        if (!gr->iscpy) sfree(gr->vtcs);
         sfree(gr->points);
+        sfree(gr->vtcs);
         freetree234(gr->vertices);
         while((e = delpos234(gr->edges, 0)) != NULL) sfree(e);
         freetree234(gr->edges);
@@ -1453,15 +1484,28 @@ static void free_game(game_state *state)
  * Replace the given edge in the given edge 234-tree. The new edge will have
  * new_src and new_tgt as source and target respetively.
  */
-static void replace_edge(tree234* edges, edge* e, int new_src, int new_tgt)
+static void replace_edge(tree234* edges, edge* e, tree234* vertices, vertex* vtcs,
+                        int new_src, int new_tgt)
 {
     del234(edges, e);
+    del234(vertices, vtcs + e->src);
+    del234(vertices, vtcs + e->tgt);
+    vtcs[e->src].deg--;
+    vtcs[e->tgt].deg--;
+    add234(vertices, vtcs + e->src);
+    add234(vertices, vtcs + e->tgt);
 
     if (new_src != new_tgt && !isedge(edges, new_src, new_tgt))
     {
         e->src = min(new_src, new_tgt);
         e->tgt = max(new_src, new_tgt);
         add234(edges, e);
+        del234(vertices, vtcs + e->src);
+        del234(vertices, vtcs + e->tgt);
+        vtcs[e->src].deg++;
+        vtcs[e->tgt].deg++;
+        add234(vertices, vtcs + e->src);
+        add234(vertices, vtcs + e->tgt);
     }
     else
     {
@@ -1484,9 +1528,11 @@ static void contract_edge(graph* graph, int dom, int rec)
     {
         ecpy = find234(edgescpy, e, edgecmp);
         if (rec == ecpy->src)
-            replace_edge(edgescpy, ecpy, dom, ecpy->tgt);
+            replace_edge(edgescpy, ecpy, graph->vertices, graph->vtcs,
+                        dom, ecpy->tgt);
         else if (rec == ecpy->tgt)
-            replace_edge(edgescpy, ecpy, ecpy->src, dom);
+            replace_edge(edgescpy, ecpy, graph->vertices, graph->vtcs,
+                        ecpy->src, dom);
     }
 
     graph->points[dom].x += (graph->points[rec].x - graph->points[dom].x) / 2;
@@ -1755,6 +1801,265 @@ static char *interpret_move(const game_state *state, game_ui *ui,
     return NULL;
 }
 
+typedef struct node node;
+
+struct node {
+    node* children;
+    vertex** cells;
+    int* cellsizes;
+    int ncells;
+    int nchildren;
+    bool isleaf;
+};
+
+static vertex* expand_node(node* n)
+{
+    int i, j;
+#if DEBUG
+    assert(n);
+#endif
+    n->isleaf = true;
+    for (i = 0; i < n->ncells; i++)
+    {
+        LOG(("Checking cell sizes - cell %d has size %d\n", i,
+            n->cellsizes[i]));
+        if (n->cellsizes[i] > 1)
+        {
+            n->isleaf = false;
+            n->nchildren = n->cellsizes[i];
+            break;
+        }
+    }
+    if (n->isleaf)
+    {
+        LOG(("Reached a leaf - creating permutation\n"));
+        vertex* permu = snewn(n->ncells, vertex);
+        for (i = 0; i < n->ncells; i++)
+        {
+            permu[i] = *n->cells[i];
+        }
+        LOG(("Created permutation with size %d\n", n->ncells));
+        return permu;
+    }
+    else
+    {
+        LOG(("Expanding node - initializing children and filling child"\
+            " cells\n"));
+        node* child;
+        n->children = snewn(n->nchildren, node);
+        for (i = 0; i < n->nchildren; i++)
+        {
+            child = n->children + i;
+            child->ncells = n->ncells + 1;
+            child->cells = snewn(child->ncells, vertex*);
+            LOG(("Initialized child node %d with %d cells\n", i,
+                child->ncells));
+            child->cellsizes = snewn(child->ncells, int);
+            j = 0;
+            while (n->cellsizes[j] == 1)
+            {
+                child->cells[j] = snew(vertex);
+                *child->cells[j] = *n->cells[j];
+                child->cellsizes[j++] = 1;
+            }
+            child->cells[j] = snew(vertex);
+            *child->cells[j] = n->cells[j][i];
+            child->cellsizes[j++] = 1;
+            child->cellsizes[j] = n->cellsizes[j-1] - 1;
+            child->cells[j] = snewn(child->cellsizes[j], vertex);
+            if (i > 0)
+                memcpy(child->cells[j], n->cells[j-1], i * sizeof(vertex));
+            if (i < n->cellsizes[j-1] - 1)
+                memcpy(child->cells[j] + i, n->cells[j-1] + i + 1,
+                        (n->cellsizes[j-1] - 1 - i) * sizeof(vertex));
+            for (j++; j < child->ncells; j++)
+            {
+                child->cells[j] = snewn(n->cellsizes[j-1], vertex);
+                memcpy(child->cells[j], n->cells[j-1],
+                        n->cellsizes[j-1] * sizeof(vertex));
+                child->cellsizes[j] = n->cellsizes[j-1];
+            }
+            LOG(("Filled child cells for child %d with vertices\n", i));
+        }
+        return NULL;
+    }
+}
+
+static void free_node(node* n, bool isroot)
+{
+    int i;
+    LOG(("Freeing node%s\n", isroot ? " that is root" :
+        n->isleaf ? " that is leaf" : ""));
+    if (!n->isleaf)
+    {
+        for (i = 0; i < n->nchildren; i++)
+        {
+            free_node(n->children + i, false);
+            LOG(("Freed node child %d of %d\n", i + 1, n->nchildren));
+        }
+        sfree(n->children);
+        LOG(("Freed node children\n"));
+    }
+    for (i = 0; i < n->ncells; i++) sfree(n->cells[i]);
+    sfree(n->cells);
+    sfree(n->cellsizes);
+    LOG(("Freed node cells\n"));
+    if (isroot)
+    {
+        sfree(n);
+        LOG(("Freed root node\n"));
+    }
+}
+
+static bool find_isomorphism(const graph* the_graph, const graph* cmp_graph)
+{
+    bool found;
+    int i, j;
+    int tmp, tmp2;
+    int nvtcs = count234(the_graph->vertices);
+    vertex* vx;
+    vertex* vtcs_the;
+    vertex* vtcs_cmp;
+    vertex* permu;
+    edge* e;
+    node* n;
+    node* root;
+    tree234* lifo;
+    tree234* permus;
+    
+    
+    if (nvtcs != (tmp = count234(cmp_graph->vertices)))
+    {
+        LOG(("The graphs have different amounts of vertices (%d and %d)\n",
+            nvtcs, tmp));
+        return false;
+    }
+
+    
+    vtcs_the = snewn(nvtcs, vertex);
+    for (i = 0; (vx = index234(the_graph->vertices, i)) != NULL; i++)
+    {
+        vtcs_the[i] = *vx;
+    }
+    vtcs_cmp = snewn(nvtcs, vertex);
+    for (i = 0; (vx = index234(cmp_graph->vertices, i)) != NULL; i++)
+    {
+        vtcs_cmp[i] = *vx;
+    }
+    qsort(vtcs_the, nvtcs, sizeof(vertex), vertcmpC2);
+    qsort(vtcs_cmp, nvtcs, sizeof(vertex), vertcmpC2);
+    tmp = 1;
+    for (i = 0; i < nvtcs; i++)
+    {
+        LOG(("Vertex %d has indices %d and %d and degrees %d and %d\n", i,
+            vtcs_the[i].idx, vtcs_cmp[i].idx, vtcs_the[i].deg, vtcs_cmp[i].deg));
+        if (vtcs_the[i].deg != vtcs_cmp[i].deg)
+        {
+            LOG(("The graphs have different vertex degree distributions\n"));
+            sfree(vtcs_the);
+            sfree(vtcs_cmp);
+            return false;
+        }
+        else if (i < nvtcs - 1 && vtcs_the[i+1].deg != vtcs_the[i].deg)
+            tmp++;
+    }
+
+    
+    root = snew(node);
+    root->ncells = tmp;
+    root->cells = snewn(root->ncells, vertex*);
+    LOG(("Initialized root node with %d cells\n", root->ncells));
+    root->cellsizes = snewn(root->ncells, int);
+    for (i = 0; i < root->ncells; i++)
+    {
+        root->cellsizes[i] = 1;
+    }
+    tmp = 0;
+    for (i = 1; i < nvtcs; i++)
+    {
+        if (vtcs_the[i].deg == vtcs_the[i-1].deg)
+            root->cellsizes[tmp]++;
+        else
+            tmp++;
+    }
+#if DEBUG
+    assert(tmp == root->ncells - 1);
+#endif
+    tmp = 0;
+    for (i = 0; i < root->ncells; i++)
+    {
+        root->cells[i] = snewn(root->cellsizes[i], vertex);
+        LOG(("Initialized root cell %d with size %d\n", i, root->cellsizes[i]));
+        for (j = 0; j < root->cellsizes[i]; j++)
+        {
+            vx = root->cells[i] + j;
+            *vx = vtcs_cmp[tmp+j];
+            LOG(("Added vertex %d with index %d and degree %d to cell %d at position"\
+                " %d\n", tmp + j, vtcs_cmp[tmp+j].idx, vtcs_cmp[tmp+j].deg, i, j));
+        }
+        tmp += root->cellsizes[i];
+    }
+    sfree(vtcs_cmp);
+    tmp = tmp2 = 0;
+    lifo = newtree234(NULL);
+    addpos234(lifo, root, tmp++);
+    LOG(("Initialized tree search structures\n"));
+    permus = newtree234(NULL);
+    while (tmp)
+    {
+        n = delpos234(lifo, --tmp);
+        LOG(("Fetched node at position %d from lifo queue\n", tmp + 1));
+        if((permu = expand_node(n)))
+        {
+            addpos234(permus, permu, tmp2++);
+            LOG(("Found suitable vertex permuation and added it to list"\
+                " of permutations\n"));
+        }
+        else
+        {
+            for (i = n->nchildren - 1; i >= 0; i--)
+            {
+                addpos234(lifo, n->children + i, tmp++);
+                LOG(("Added child node %d at position %d to lifo queue\n",
+                    i, tmp - 1));
+            }
+        }
+    }
+    freetree234(lifo);
+    for (i = 0; i < tmp2; i++)
+    {
+        int map[80];
+        found = true;
+        permu = index234(permus, i);
+        for (j = 0; j < nvtcs; j++)
+        {
+            map[permu[j].idx] = vtcs_the[j].idx;
+        }
+        for (j = 0; (e = index234(cmp_graph->edges, j)) != NULL; j++)
+        {
+            if (!isedge(the_graph->edges, map[e->src], map[e->tgt]))
+            {
+                LOG(("Permutation %d is no isomorphism between the graphs,\n"\
+                    " missing edge %d-%d in one of the graphs", i, map[e->src],
+                    map[e->tgt]));
+                found = false;
+                break;
+            }
+        }
+        if (found) {
+            LOG(("Permutation %d is an isomorphism between the graphs\n", i));
+            break;
+        }
+    }
+
+    sfree(vtcs_the);
+    free_node(root, true);
+    while ((permu = delpos234(permus, 0)) != NULL) sfree(permu);
+    freetree234(permus);
+
+    return found;
+}
+
 static game_state *execute_move(const game_state *state, const char *move)
 {
     bool contr = false;
@@ -1812,6 +2117,8 @@ static game_state *execute_move(const game_state *state, const char *move)
     {
         /* Contract the edge between dom and rec */
         contract_edge(ret->base, dom, rec);
+        if (!state->solved)
+            ret->solved = find_isomorphism(ret->minor, ret->base);
     }
     else
     {
@@ -1888,14 +2195,14 @@ static float *game_colours(frontend *fe, int *ncolours)
     ret[(COL_CONTREDGE * 3) + 2] = 0.0F;
 
     /* white */
-    ret[(COL_SOLVEFLASH * 3) + 0] = 1.0F;
-    ret[(COL_SOLVEFLASH * 3) + 1] = 1.0F;
-    ret[(COL_SOLVEFLASH * 3) + 2] = 1.0F;
+    ret[(COL_FLASH * 3) + 0] = 1.0F;
+    ret[(COL_FLASH * 3) + 1] = 1.0F;
+    ret[(COL_FLASH * 3) + 2] = 1.0F;
 
-    /* light red */
-    ret[(COL_LOSEFLASH * 3) + 0] = 1.0F;
-    ret[(COL_LOSEFLASH * 3) + 1] = 0.3F;
-    ret[(COL_LOSEFLASH * 3) + 2] = 0.3F;
+    /* grey */
+    ret[(COL_FLASH2 * 3) + 0] = 0.5F;
+    ret[(COL_FLASH2 * 3) + 1] = 0.5F;
+    ret[(COL_FLASH2 * 3) + 2] = 0.5F;
 
     /* black */
     ret[(COL_TEXT * 3) + 0] = 0.1F;
@@ -1927,6 +2234,8 @@ static void game_free_drawstate(drawing *dr, game_drawstate *ds)
     sfree(ds);
 }
 
+#define FLASH_LENGTH 0.3F
+
 static void game_redraw(drawing *dr, game_drawstate *ds,
                         const game_state *oldstate, const game_state *state,
                         int dir, const game_ui *ui,
@@ -1945,13 +2254,13 @@ static void game_redraw(drawing *dr, game_drawstate *ds,
      * Check whether game has been recently solved and solve function
      * hasn't been used.
      */
-    if (state->solved && !oldstate->solved && !state->cheated)
-        bg_color = COL_SOLVEFLASH;
-    /* Check whether game has been recently lost */
-    else if (state->lost && !oldstate->lost)
-        bg_color = COL_LOSEFLASH;
-    else
+    if (!flashtime)
         bg_color = COL_BACKGROUND;
+    else if (flashtime < (FLASH_LENGTH / 3.0F) ||
+            flashtime > 2.0F * (FLASH_LENGTH / 3.0F))
+        bg_color = COL_FLASH;
+    else
+        bg_color = COL_FLASH2;
     
     /*
      * The initial contents of the window are not guaranteed and
@@ -2040,17 +2349,14 @@ static float game_flash_length(const game_state *oldstate,
      * hasn't been used.
      */
     if (newstate->solved && !oldstate->solved && !newstate->cheated)
-        return 0.3F;
-    /* Check whether game has been recently lost */
-    else if (newstate->lost && !oldstate->lost)
-        return 0.3F;
+        return FLASH_LENGTH;
     else
         return 0.0F;
 }
 
 static int game_status(const game_state *state)
 {
-    return 0;
+    return state->solved ? 1 : 0;
 }
 
 static bool game_timing_state(const game_state *state, game_ui *ui)
