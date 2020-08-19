@@ -1826,7 +1826,6 @@ static vertex* expand_node(node* n)
 #if DEBUG
     assert(n);
 #endif
-    n->isleaf = true;
     for (i = 0; i < n->ncells; i++)
     {
         LOG(("Checking cell sizes - cell %d has size %d\n", i,
@@ -1851,9 +1850,9 @@ static vertex* expand_node(node* n)
     }
     else
     {
+        node* child;
         LOG(("Expanding node - initializing children and filling child"\
             " cells\n"));
-        node* child;
         n->children = snewn(n->nchildren, node);
         for (i = 0; i < n->nchildren; i++)
         {
@@ -1863,6 +1862,7 @@ static vertex* expand_node(node* n)
             LOG(("Initialized child node %d with %d cells\n", i,
                 child->ncells));
             child->cellsizes = snewn(child->ncells, int);
+            child->isleaf = true;
             j = 0;
             while (n->cellsizes[j] == 1)
             {
@@ -1933,7 +1933,7 @@ static bool find_isomorphism(const graph* the_graph, const graph* cmp_graph)
 {
     bool found;
     int i, j;
-    int tmp, tmp2;
+    int tmp;
     int nvtcs = count234(the_graph->vertices);
     vertex* vx;
     vertex* vtcs_the;
@@ -1943,7 +1943,6 @@ static bool find_isomorphism(const graph* the_graph, const graph* cmp_graph)
     node* n;
     node* root;
     tree234* lifo;
-    tree234* permus;
     
     /* Check whether the graphs have the same number of vertices */
     if (nvtcs != (tmp = count234(cmp_graph->vertices)))
@@ -2000,6 +1999,7 @@ static bool find_isomorphism(const graph* the_graph, const graph* cmp_graph)
     root->cells = snewn(root->ncells, vertex*);
     LOG(("Initialized root node with %d cells\n", root->ncells));
     root->cellsizes = snewn(root->ncells, int);
+    root->isleaf = true;
     for (i = 0; i < root->ncells; i++)
     {
         root->cellsizes[i] = 1;
@@ -2030,20 +2030,46 @@ static bool find_isomorphism(const graph* the_graph, const graph* cmp_graph)
         tmp += root->cellsizes[i];
     }
     sfree(vtcs_cmp);
-    tmp = tmp2 = 0;
+    tmp = 0;
     lifo = newtree234(NULL);
     addpos234(lifo, root, tmp++);
     LOG(("Initialized tree search structures\n"));
-    permus = newtree234(NULL);
     while (tmp)
     {
         n = delpos234(lifo, --tmp);
         LOG(("Fetched node at position %d from lifo queue\n", tmp + 1));
         if((permu = expand_node(n)))
         {
-            addpos234(permus, permu, tmp2++);
-            LOG(("Found suitable vertex permuation and added it to list"\
-                " of permutations\n"));
+            int map[80];
+            LOG(("Found vertex permuation that could be an ismomorphism"\
+                " between the graphs\n"));
+            found = true;
+            /*
+            * We don't need to check whether the test graph has additional edges that
+            * are missing in the comparison graph since we already compared the vertex
+            * degree distibutions of both graphs. Thus the sum of all vertex degrees
+            * must be equal for both graphs and the number of edges respectively.
+            */
+            for (j = 0; j < nvtcs; j++)
+            {
+                map[permu[j].idx] = vtcs_the[j].idx;
+            }
+            sfree(permu);
+            for (j = 0; (e = index234(cmp_graph->edges, j)) != NULL; j++)
+            {
+                if (!isedge(the_graph->edges, map[e->src], map[e->tgt]))
+                {
+                    LOG(("Permutation is no isomorphism between the graphs,\n"\
+                        " missing edge %d-%d in the test graph", map[e->src],
+                        map[e->tgt]));
+                    found = false;
+                    break;
+                }
+            }
+            if (found) {
+                LOG(("Permutation is an isomorphism between the graphs\n"));
+                break;
+            }
         }
         else
         {
@@ -2055,43 +2081,10 @@ static bool find_isomorphism(const graph* the_graph, const graph* cmp_graph)
             }
         }
     }
-    freetree234(lifo);
-    for (i = 0; i < tmp2; i++)
-    {
-        int map[80];
-        found = true;
-        permu = index234(permus, i);
-        /*
-         * We don't need to check whether the test graph has additional edges that
-         * are missing in the comparison graph since we already compared the vertex
-         * degree distibutions of both graphs. Thus the sum of all vertex degrees
-         * must be equal for both graphs and the number of edges respectively.
-         */
-        for (j = 0; j < nvtcs; j++)
-        {
-            map[permu[j].idx] = vtcs_the[j].idx;
-        }
-        for (j = 0; (e = index234(cmp_graph->edges, j)) != NULL; j++)
-        {
-            if (!isedge(the_graph->edges, map[e->src], map[e->tgt]))
-            {
-                LOG(("Permutation %d is no isomorphism between the graphs,\n"\
-                    " missing edge %d-%d in the test graph", i, map[e->src],
-                    map[e->tgt]));
-                found = false;
-                break;
-            }
-        }
-        if (found) {
-            LOG(("Permutation %d is an isomorphism between the graphs\n", i));
-            break;
-        }
-    }
 
     sfree(vtcs_the);
     free_node(root, true);
-    while ((permu = delpos234(permus, 0)) != NULL) sfree(permu);
-    freetree234(permus);
+    freetree234(lifo);
 
     return found;
 }
