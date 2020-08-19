@@ -690,7 +690,7 @@ static void addedges(tree234* edges, tree234* vertices, point* points, int n_pts
 #define COORDMARGIN_BASE 1
 #define COORDMARGIN_MIN 3
 #define COORDDENSITY_MIN 2
-#define COORDLIMIT(n) ((n) - ((n) % COORDDENSITY_MIN) + (2 * COORDMARGIN_BASE) + 1)
+#define COORDLIMIT(n) ((n) - ((n) % COORDDENSITY_MIN) + (2 * COORDMARGIN_BASE))
 #define COORDUNIT 32
 
 #define square(x) ((x) * (x))
