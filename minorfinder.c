@@ -61,7 +61,7 @@ enum {
 };
 
 enum default_params {
-    DEFAULT_N_BASE = 11,
+    DEFAULT_N_BASE = 15,
     DEFAULT_N_MIN = 4
 };
 
@@ -185,11 +185,11 @@ static bool game_fetch_preset(int i, char **name, game_params **params)
             n_min = DEFAULT_N_MIN;
             break;
         case 1:
-            n_base = 14;
+            n_base = 19;
             n_min = 5;
             break;
         case 2:
-            n_base = 17;
+            n_base = 23;
             n_min = 6;
             break;
         default:
@@ -1565,9 +1565,13 @@ static void game_changed_state(game_ui *ui, const game_state *oldstate,
     }
 }
 
+#define HEADLINE_HEIGHT 32
+
 struct game_drawstate {
 
     int tilesize;
+
+    long headline_height;
 
 };
 
@@ -1599,6 +1603,7 @@ static char *interpret_move(const game_state *state, game_ui *ui,
      * to subtract the grid size from the x-coordinate of the mouse event.
      */
     x -= state->base->grid * ui->g_size;
+    y -= ds->headline_height;
 
     if (IS_MOUSE_DOWN(button))
     {
@@ -2101,13 +2106,14 @@ static void game_compute_size(const game_params *params, int tilesize,
 {
     int g_size = COORDLIMIT(params->n_base) * tilesize;
     *x = NGRIDS * g_size;
-    *y = g_size;
+    *y = g_size + HEADLINE_HEIGHT;
 }
 
 static void game_set_size(drawing *dr, game_drawstate *ds,
                           const game_params *params, int tilesize)
 {
     ds->tilesize = tilesize;
+    ds->headline_height = HEADLINE_HEIGHT;
 }
 
 static float *game_colours(frontend *fe, int *ncolours)
@@ -2187,6 +2193,7 @@ static game_drawstate *game_new_drawstate(drawing *dr, const game_state *state)
     struct game_drawstate *ds = snew(struct game_drawstate);
 
     ds->tilesize = COORDUNIT;
+    ds->headline_height = HEADLINE_HEIGHT;
 
     return ds;
 }
@@ -2230,24 +2237,24 @@ static void game_redraw(drawing *dr, game_drawstate *ds,
      * should start by drawing a big background-colour rectangle
      * covering the whole window.
      */
-    draw_rect(dr, 0, 0, ui->width, ui->height, bg_color);
+    draw_rect(dr, 0, 0, ui->width, ui->height + ds->headline_height, bg_color);
 
     /*
      * Draw an outline around the area where the game is drawn and
      * separate the two grids for the base graph and minor by a thick
      * line.
      */
-    draw_rect_outline(dr, 0, 0, ui->width, ui->height, COL_OUTLINE);
+    draw_rect_outline(dr, 0, 0, ui->width, ui->height + ds->headline_height, COL_OUTLINE);
     draw_thick_line(dr, 2.0F, (float) ui->g_size, 0.0F, (float) ui->g_size,
-                        (float) ui->g_size, COL_GRIDBORDER);
+                        (float) ui->g_size + ds->headline_height, COL_GRIDBORDER);
     /*
      * Draw texts that make clear which of the two grids belongs to
      * the base graph and which to the minor.
      */
-    draw_text(dr, ui->g_size / 2, ui->g_margin / 2, FONT_FIXED, ui->g_margin / 2,
+    draw_text(dr, ui->g_size / 2, ds->headline_height / 2, FONT_FIXED, ds->headline_height / 2,
                 ALIGN_VCENTRE | ALIGN_HCENTRE, COL_TEXT, "MINOR");
-    draw_text(dr, ui->g_size + (ui->g_size / 2), ui->g_margin / 2, FONT_FIXED,
-                ui->g_margin / 2, ALIGN_VCENTRE | ALIGN_HCENTRE, COL_TEXT, "ORIGINAL");
+    draw_text(dr, ui->g_size + (ui->g_size / 2), ds->headline_height / 2, FONT_FIXED,
+                ds->headline_height / 2, ALIGN_VCENTRE | ALIGN_HCENTRE, COL_TEXT, "ORIGINAL");
 
     /* Draw the minor edges in the intended grid */
     pts = state->minor->points;
@@ -2256,13 +2263,14 @@ static void game_redraw(drawing *dr, game_drawstate *ds,
     {
         esrc = pts + e->src;
         etgt = pts + e->tgt;
-        draw_line(dr, esrc->x + x_off, esrc->y, etgt->x + x_off, etgt->y, COL_EDGE);
+        draw_line(dr, esrc->x + x_off, esrc->y + ds->headline_height, etgt->x + x_off,
+                    etgt->y + ds->headline_height, COL_EDGE);
     }
     /* Draw the minor points in the intended grid */
     for (i = 0; (vx = index234(state->minor->vertices, i)) != NULL; i++)
     {
-        draw_circle(dr, pts[vx->idx].x + x_off, pts[vx->idx].y, POINTRADIUS, COL_MINORPOINT,
-                    COL_POINTOUTLINE);
+        draw_circle(dr, pts[vx->idx].x + x_off, pts[vx->idx].y + ds->headline_height,
+                    POINTRADIUS, COL_MINORPOINT, COL_POINTOUTLINE);
     }
 
     /* Draw the base graph edges in the intended grid */
@@ -2273,9 +2281,9 @@ static void game_redraw(drawing *dr, game_drawstate *ds,
         esrc = pts + e->src;
         etgt = pts + e->tgt;
         draw_line(dr, ((ui->dragpt == e->src) ? ui->newpt.x : esrc->x) + x_off,
-                    (ui->dragpt == e->src) ? ui->newpt.y : esrc->y,
+                    ((ui->dragpt == e->src) ? ui->newpt.y : esrc->y) + ds->headline_height,
                     ((ui->dragpt == e->tgt) ? ui->newpt.x : etgt->x) + x_off,
-                    (ui->dragpt == e->tgt) ? ui->newpt.y : etgt->y,
+                    ((ui->dragpt == e->tgt) ? ui->newpt.y : etgt->y) + ds->headline_height,
                     (e->tgt == ui->mergept_rec && e->src == ui->mergept_dom) ?
                     COL_CONTREDGE : COL_EDGE);
     }
@@ -2283,18 +2291,18 @@ static void game_redraw(drawing *dr, game_drawstate *ds,
     for (i = 0; (vx = index234(state->base->vertices, i)) != NULL; i++)
     {
         draw_circle(dr, ((vx->idx == ui->dragpt) ? ui->newpt.x : pts[vx->idx].x) + x_off,
-                    (vx->idx == ui->dragpt) ? ui->newpt.y : pts[vx->idx].y, POINTRADIUS,
-                    (vx->idx == ui->dragpt) ? COL_DRAGPOINT :
+                    ((vx->idx == ui->dragpt) ? ui->newpt.y : pts[vx->idx].y) + ds->headline_height,
+                    POINTRADIUS, (vx->idx == ui->dragpt) ? COL_DRAGPOINT :
 #if DEBUG
-                    (vx->idx < state->params.n_min * (state->params.n_base / state->params.n_min)) ?
-                    COL_SUBPOINT : COL_BASEPOINT,
+                    (vx->idx < state->params.n_min * (state->params.n_base /
+                    state->params.n_min)) ? COL_SUBPOINT : COL_BASEPOINT,
 #else
                     COL_BASEPOINT,
 #endif
                     COL_POINTOUTLINE);
     }
 
-    draw_update(dr, 0, 0, ui->width, ui->height);
+    draw_update(dr, 0, 0, ui->width, ui->height + ds->headline_height);
 }
 
 static float game_anim_length(const game_state *oldstate,
@@ -2370,7 +2378,7 @@ const struct game thegame = {
     game_redraw,                                                        /* done */
     game_anim_length,
     game_flash_length,                                                  /* done */
-    game_status,
+    game_status,                                                        /* done */
     false, false, game_print_size, game_print,
     false,			       /* wants_statusbar */
     false, game_timing_state,
