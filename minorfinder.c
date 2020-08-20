@@ -1766,8 +1766,6 @@ static vertex* expand_node(node* n)
     
     for (i = 0; i < n->ncells; i++)
     {
-        LOG(("Checking cell sizes - cell %d has size %d\n", i,
-            n->cellsizes[i]));
         if (n->cellsizes[i] > 1)
         {
             n->isleaf = false;
@@ -1777,40 +1775,43 @@ static vertex* expand_node(node* n)
     }
     if (n->isleaf)
     {
-        LOG(("Reached a leaf - creating permutation\n"));
         vertex* permu = snewn(n->ncells, vertex);
+        LOG(("Reached leaf and created corresponding permutation with size %d\n"\
+            "The permutation is (", n->ncells));
         for (i = 0; i < n->ncells; i++)
         {
             permu[i] = *n->cells[i];
+            LOG(("%d%s", permu[i].idx, (i < n->ncells - 1) ? ", " : ")\n"));
         }
-        LOG(("Created permutation with size %d\n", n->ncells));
         return permu;
     }
     else
     {
         node* child;
-        LOG(("Expanding node - initializing children and filling child"\
-            " cells\n"));
         n->children = snewn(n->nchildren, node);
+        LOG(("Expanded node and created %d child nodes\n",
+            n->nchildren));
         for (i = 0; i < n->nchildren; i++)
         {
             child = n->children + i;
             child->ncells = n->ncells + 1;
             child->cells = snewn(child->ncells, vertex*);
-            LOG(("Initialized child node %d with %d cells\n", i,
-                child->ncells));
             child->cellsizes = snewn(child->ncells, int);
             child->isleaf = true;
+            LOG(("Initialized child node %d with %d cells\nCreating new refinement"\
+                " of parent cells\n", i, child->ncells));
             j = 0;
             while (n->cellsizes[j] == 1)
             {
                 child->cells[j] = snew(vertex);
                 *child->cells[j] = *n->cells[j];
                 child->cellsizes[j++] = 1;
+                LOG(("Initialized child cell %d with size 1\n", j - 1));
             }
             child->cells[j] = snew(vertex);
             *child->cells[j] = n->cells[j][i];
             child->cellsizes[j++] = 1;
+            LOG(("Initialized child cell %d with size 1\n", j - 1));
             child->cellsizes[j] = n->cellsizes[j-1] - 1;
             child->cells[j] = snewn(child->cellsizes[j], vertex);
             if (i > 0)
@@ -1818,14 +1819,16 @@ static vertex* expand_node(node* n)
             if (i < n->cellsizes[j-1] - 1)
                 memcpy(child->cells[j] + i, n->cells[j-1] + i + 1,
                         (n->cellsizes[j-1] - 1 - i) * sizeof(vertex));
+            LOG(("Initialized child cell %d with size %d\n", j, child->cellsizes[j]));
             for (j++; j < child->ncells; j++)
             {
                 child->cells[j] = snewn(n->cellsizes[j-1], vertex);
                 memcpy(child->cells[j], n->cells[j-1],
                         n->cellsizes[j-1] * sizeof(vertex));
                 child->cellsizes[j] = n->cellsizes[j-1];
+                LOG(("Initialized child cell %d with size %d\n", j, child->cellsizes[j]));
             }
-            LOG(("Filled child cells for child %d with vertices\n", i));
+            LOG(("Created new refinement of parent cells for child %d\n", i));
         }
         return NULL;
     }
@@ -1838,27 +1841,19 @@ static vertex* expand_node(node* n)
 static void free_node(node* n, bool isroot)
 {
     int i;
-    LOG(("Freeing node%s\n", isroot ? " that is root" :
-        n->isleaf ? " that is leaf" : ""));
+
     if (!n->isleaf)
     {
         for (i = 0; i < n->nchildren; i++)
         {
             free_node(n->children + i, false);
-            LOG(("Freed node child %d of %d\n", i + 1, n->nchildren));
         }
         sfree(n->children);
-        LOG(("Freed node children\n"));
     }
     for (i = 0; i < n->ncells; i++) sfree(n->cells[i]);
     sfree(n->cells);
     sfree(n->cellsizes);
-    LOG(("Freed node cells\n"));
-    if (isroot)
-    {
-        sfree(n);
-        LOG(("Freed root node\n"));
-    }
+    if (isroot) sfree(n);
 }
 
 /*
@@ -1935,9 +1930,9 @@ static bool find_isomorphism(const graph* the_graph, const graph* cmp_graph)
     root = snew(node);
     root->ncells = tmp;
     root->cells = snewn(root->ncells, vertex*);
-    LOG(("Initialized root node with %d cells\n", root->ncells));
     root->cellsizes = snewn(root->ncells, int);
     root->isleaf = true;
+    LOG(("Initialized root node with %d cells\n", root->ncells));
     for (i = 0; i < root->ncells; i++)
     {
         root->cellsizes[i] = 1;
@@ -1957,13 +1952,13 @@ static bool find_isomorphism(const graph* the_graph, const graph* cmp_graph)
     for (i = 0; i < root->ncells; i++)
     {
         root->cells[i] = snewn(root->cellsizes[i], vertex);
-        LOG(("Initialized root cell %d with size %d\n", i, root->cellsizes[i]));
         for (j = 0; j < root->cellsizes[i]; j++)
         {
             vx = root->cells[i] + j;
             *vx = vtcs_cmp[tmp+j];
-            LOG(("Added vertex %d with index %d and degree %d to cell %d at position"\
-                " %d\n", tmp + j, vtcs_cmp[tmp+j].idx, vtcs_cmp[tmp+j].deg, i, j));
+            LOG(("Added vertex %d with index %d and degree %d to root cell %d at"\
+                " position %d\n", tmp + j, vtcs_cmp[tmp+j].idx, vtcs_cmp[tmp+j].deg,
+                i, j));
         }
         tmp += root->cellsizes[i];
     }
@@ -1971,17 +1966,18 @@ static bool find_isomorphism(const graph* the_graph, const graph* cmp_graph)
     tmp = 0;
     lifo = newtree234(NULL);
     addpos234(lifo, root, tmp++);
-    LOG(("Initialized tree search structures\n"));
+    LOG(("Initialized lifo queue with root node\nStarting depth first search for"\
+        " an isomorphism between the graphs\n"));
     while (tmp)
     {
         n = delpos234(lifo, --tmp);
-        LOG(("Fetched node at position %d from lifo queue\n", tmp + 1));
+        LOG(("Fetched node at position %d from the lifo queue\n", tmp + 1));
         if((permu = expand_node(n)))
         {
             int map[80];
+            found = true;
             LOG(("Found vertex permuation that could be an ismomorphism"\
                 " between the graphs\n"));
-            found = true;
             /*
             * We don't need to check whether the test graph has additional edges that
             * are missing in the comparison graph since we already compared the vertex
@@ -1997,10 +1993,10 @@ static bool find_isomorphism(const graph* the_graph, const graph* cmp_graph)
             {
                 if (!isedge(the_graph->edges, map[e->src], map[e->tgt]))
                 {
-                    LOG(("Permutation is no isomorphism between the graphs,\n"\
-                        " missing edge %d-%d in the test graph", map[e->src],
-                        map[e->tgt]));
                     found = false;
+                    LOG(("Permutation is no isomorphism between the graphs,\n"\
+                        " missing edge %d-%d in the test graph\n", map[e->src],
+                        map[e->tgt]));
                     break;
                 }
             }
@@ -2014,8 +2010,8 @@ static bool find_isomorphism(const graph* the_graph, const graph* cmp_graph)
             for (i = n->nchildren - 1; i >= 0; i--)
             {
                 addpos234(lifo, n->children + i, tmp++);
-                LOG(("Added child node %d at position %d to lifo queue\n",
-                    i, tmp - 1));
+                LOG(("Added child node %d at position %d to lifo queue\n", i,
+                    tmp - 1));
             }
         }
     }
