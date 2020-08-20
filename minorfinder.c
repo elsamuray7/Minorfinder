@@ -2000,7 +2000,8 @@ static bool find_isomorphism(const graph* the_graph, const graph* cmp_graph)
                     break;
                 }
             }
-            if (found) {
+            if (found)
+            {
                 LOG(("Permutation is an isomorphism between the graphs\n"));
                 break;
             }
