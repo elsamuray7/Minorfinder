@@ -1360,20 +1360,10 @@ static graph* dup_graph(const graph* gr, int n)
     memcpy(ret->points, gr->points, n * sizeof(point));
     ret->vtcs = snewn(n, vertex);
     memcpy(ret->vtcs, gr->vtcs, n * sizeof(vertex));
-#if DEBUG
-    for (i = 0; i < n; i++)
-    {
-        assert(ret->vtcs[i].idx == gr->vtcs[i].idx);
-        assert(ret->vtcs[i].idx == i);
-    }
-#endif
+
     ret->vertices = newtree234(vertcmp);
     for (i = 0; (vx = index234(gr->vertices, i)) != NULL; i++)
     {
-#if DEBUG
-        assert(ret->vtcs[vx->idx].idx == gr->vtcs[vx->idx].idx);
-        assert(ret->vtcs[vx->idx].idx == vx->idx);
-#endif
         add234(ret->vertices, ret->vtcs + vx->idx);
     }
     /*
@@ -1768,9 +1758,7 @@ struct node {
 static vertex* expand_node(node* n)
 {
     int i, j;
-#if DEBUG
-    assert(n);
-#endif
+    
     for (i = 0; i < n->ncells; i++)
     {
         LOG(("Checking cell sizes - cell %d has size %d\n", i,
