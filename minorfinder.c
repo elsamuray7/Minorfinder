@@ -952,6 +952,8 @@ static char *new_game_desc(const game_params *params, random_state *rs,
         }
         pt = pts_base + tmp2 + tmp3++;
         *pt = p;
+        LOG(("Assigned coordinates x:%ld, y:%ld and denominator %ld to base graph point %ld\n",
+            pt->x, pt->y, pt->d, tmp2 + tmp3 - 1));
         next_coords:
         if (tmp2 + tmp3 >= n_base) break;
     }
