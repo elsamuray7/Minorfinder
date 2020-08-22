@@ -547,22 +547,6 @@ static int vertcmpC(const void *av, const void *bv)
 {
     const vertex *a = (vertex *)av;
     const vertex *b = (vertex *)bv;
-
-    if (a->deg > b->deg)
-	return -1;
-    else if (a->deg < b->deg)
-	return +1;
-    else if (a->idx < b->idx)
-	return -1;
-    else if (a->idx > b->idx)
-	return +1;
-    return 0;
-}
-
-static int vertcmpC2(const void *av, const void *bv)
-{
-    const vertex *a = (vertex *)av;
-    const vertex *b = (vertex *)bv;
     
     if (a->deg < b->deg)
 	return -1;
@@ -602,19 +586,19 @@ static int vertcmp(void *av, void *bv)
  */
 
 #define MAXDEGREE 6
-#define POINTRADIUS 5
+#define POINTRADIUS 6
 #define POINT_CROSSCHECK_ACCURACY 50
 
 /*
  * Check whether the edge between s and t crosses the point p
  */
-static bool crosspoint(point p, point s, point t)
+static bool crosspoint(point s, point t, point p)
 {
     int i;
 
     for (i = 0; i < POINT_CROSSCHECK_ACCURACY; i++)
     {
-        double a = (double) i * (2.0 * PI) / (double) (2 * POINT_CROSSCHECK_ACCURACY);
+        double a = (double) i * 2.0 * PI / (double) (2 * POINT_CROSSCHECK_ACCURACY);
         point pa;
         point pb;
         pa.x = p.x + ((POINTRADIUS + 2) * sin(a));
@@ -634,85 +618,119 @@ static bool crosspoint(point p, point s, point t)
  * Add edges between the vertices. Make sure that edges don't cross and that the degree of
  * the vertices doesn't increase beyond MAXDEGREE.
  */
-static void addedges(tree234* edges, tree234* vertices, point* points, int n_vtcs, int n_pts)
+static void addedges(tree234* edges, vertex* src_vertices, vertex* tgt_vertices, point* points,
+                    const int __off_src_vtcs, const int __n_src_vtcs, const int __off_tgt_vtcs,
+                    const int __n_tgt_vtcs, const int n_pts, const int max_deg, random_state* rs)
 {
-    int i, j;
+    int i, j, k;
+    int off_tgt_vtcs;
+    int n_tgt_vtcs;
     vertex* vxa;
     vertex* vxb;
+    vertex** src_vtcs;
+    vertex** tgt_vtcs;
     edge* e;
-    
-    while (n_vtcs >= 2)
-    {
-        vxa = delpos234(vertices, 0);
-        n_vtcs--;
-        
-        for (i = n_vtcs - 1; i >= 0;)
-        {
-            vxb = index234(vertices, i);
 
-            if (isedge(edges, vxa->idx, vxb->idx))
-                goto next_vertex; /* this edge already exists => next vertex */
-            /* check for crossing edges */
-            for (j = 0; (e = index234(edges, j)) != NULL; j++)
+    src_vtcs = snewn(__n_src_vtcs, vertex*);
+    for (i = 0; i < __n_src_vtcs; i++)
+    {
+        src_vtcs[i] = src_vertices + __off_src_vtcs + i;
+    }
+    shuffle(src_vtcs, __n_src_vtcs, sizeof(vertex*), rs);
+
+    if (!tgt_vertices)
+    {
+        off_tgt_vtcs = __off_src_vtcs;
+        n_tgt_vtcs = __n_src_vtcs;
+        tgt_vtcs = src_vtcs;
+    }
+    else
+    {
+        off_tgt_vtcs = __off_tgt_vtcs;
+        n_tgt_vtcs = __n_tgt_vtcs;
+        tgt_vtcs = snewn(n_tgt_vtcs, vertex*);
+        for (i = 0; i < n_tgt_vtcs; i++)
+        {
+            tgt_vtcs[i] = tgt_vertices + off_tgt_vtcs + i;
+        }
+        shuffle(tgt_vtcs, n_tgt_vtcs, sizeof(vertex*), rs);
+    }
+    
+    for (i = 0; i < __n_src_vtcs; i++)
+    {
+        vxa = src_vtcs[i];
+        
+        for (j = 0; j < n_tgt_vtcs; j++)
+        {
+            vxb = tgt_vtcs[j];
+            LOG(("Trying to add edge between vertices %d and %d\n", vxa->idx, vxb->idx));
+
+            if (vxb->idx <= vxa->idx || vxb->deg >= max_deg)
             {
-                if (vxa->idx == e->src || vxa->idx == e->tgt ||
-                    vxb->idx == e->src || vxb->idx == e->tgt)
-                    continue;
-                else if (cross(points[vxa->idx], points[vxb->idx],
-                                points[e->src], points[e->tgt]))
-                    goto next_vertex; /* this edge crosses another edge => next vertex */
+                LOG(("The edge %d-%d can't be added\n", vxa->idx, vxb->idx));
+                continue;
             }
-            /* check for crossing points */
-            for (j = 0; j < n_pts; j++)
+            else if (isedge(edges, vxa->idx, vxb->idx))
             {
-                if (vxa->idx == j || vxb->idx == j)
+                LOG(("The edge %d-%d does already exist\n", vxa->idx, vxb->idx));
+                continue;
+            }
+            /* check for crossing edges */
+            for (k = 0; (e = index234(edges, k)) != NULL; k++)
+            {
+                if (vxa->idx == e->src || vxa->idx == e->tgt || vxb->idx == e->src ||
+                    vxb->idx == e->tgt)
                 {
                     continue;
                 }
-                else if (crosspoint(points[j], points[vxa->idx], points[vxb->idx]))
+                else if (cross(points[vxa->idx], points[vxb->idx], points[e->src],
+                                points[e->tgt]))
                 {
-                    goto next_vertex; /* this edge crosses a point => next vertex */
+                    LOG(("The edge %d-%d crosses the edge %d-%d\n", vxa->idx, vxb->idx,
+                        e->src, e->tgt));
+                    goto next_vxb; /* this edge crosses another edge => next vxb */
+                }
+            }
+            /* check for crossing points */
+            for (k = 0; k < n_pts; k++)
+            {
+                if (k == vxa->idx || k == vxb->idx)
+                {
+                    continue;
+                }
+                else if (crosspoint(points[vxa->idx], points[vxb->idx], points[k]))
+                {
+                    LOG(("The edge %d-%d crosses the point %d\n", vxa->idx, vxb->idx, j));
+                    goto next_vxb; /* this edge crosses a point => next vxb */
                 }
             }
 
             addedge(edges, vxa->idx, vxb->idx);
-            del234(vertices, vxb);
-            vxb->deg++;
-            if (vxb->deg < MAXDEGREE)
-            {
-                add234(vertices, vxb);
-            }
-            else
-            {
-                n_vtcs--;
-                i--;
-            }
+            LOG(("Added edge between vertices %d and %d\n", vxa->idx, vxb->idx));
             vxa->deg++;
-            if (vxa->deg >= MAXDEGREE) break;
-            else continue;
+            vxb->deg++;
+            LOG(("Updated degrees of vertices %d to %d and %d to %d\n", vxa->idx, vxa->deg,
+                vxb->idx, vxb->deg));
+            if (vxa->deg >= max_deg) break;
 
-            /*
-            * I'm very sorry, I had to decide between multiple breaks, continues,
-            * further effort for checking the conditions for every break and con-
-            * tinue respectively and goto. The latter seemed to be the better evil.
-            * Here we decrement the loop variable and continue the loop to get the
-            * next vertex.
-            */
-            next_vertex:
-            i--;
+            next_vxb:;
         }
     }
+
+    sfree(src_vtcs);
+    if (tgt_vertices) sfree(tgt_vtcs);
 }
 
 /*
  * These parameters are highly sensitive, changing them may cause problems when
  * generating new game descriptions.
  */
-#define COORDMARGIN_BASE 1
-#define COORDMARGIN_MIN 3
-#define COORDDENSITY_MIN 2
-#define COORDLIMIT(n) ((n) - ((n) % COORDDENSITY_MIN) + (2 * COORDMARGIN_BASE))
-#define COORDUNIT 32
+#define COORDMARGIN 1
+#define COORDLIMIT(n) ((n) + (2 * COORDMARGIN))
+#define COORDUNIT 24
+
+#define MINORRADIUS(n) ((n) / 3)
+#define SUBGRAPH_POINT_ENTROPY 2
 
 #define square(x) ((x) * (x))
 
@@ -728,6 +746,7 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     long i, j, k, l;
     long tmp, tmp2, tmp3;
     long coord_lim;
+    long circle_rad;
     long* coords_x;
     long* coords_y;
     long* radii;
@@ -741,278 +760,212 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     vertex* vx;
     vertex* vtcs_min;
     vertex* vtcs_base;
-    tree234* vtcs_234;
 
     edge* e;
     tree234* edges_min_234;
     tree234* edges_base_234;
 
     coord_lim = COORDLIMIT(n_base);
+    circle_rad = MINORRADIUS(n_base);
 
-    /*
-     * Generate random coordinates for the minor points. The coordinates will
-     * be in the following range:
-     * 
-     * [COORDMARGIN_MIN, coord_lim - COORDMARGIN_MIN]
-     */
-    tmp = coord_lim - (2 * COORDMARGIN_MIN);
-    tmp2 = (tmp / COORDDENSITY_MIN) + 1;
-    coords_x = snewn(tmp2, long);
-    coords_y = snewn(tmp2, long);
-    for (i = 0; i <= tmp; i += COORDDENSITY_MIN)
-    {
-        int idx = i / COORDDENSITY_MIN;
-        coords_x[idx] = i + COORDMARGIN_MIN;
-        coords_y[idx] = i + COORDMARGIN_MIN;
-    }
-    shuffle(coords_x, tmp2, sizeof(*coords_x), rs);
-    shuffle(coords_y, tmp2, sizeof(*coords_y), rs);
-
-    /* Assign random coordinates to the minor points */
+    /* Arrange the minor points in a circle with radius circle_rad */
+    tmp = coord_lim - (2 * COORDMARGIN);
     pts_min = snewn(n_min, point);
     for (i = 0; i < n_min; i++)
     {
+        double angle = ((double) i * 2.0 * PI) / (double) n_min;
         pt = pts_min + i;
-        pt->x = coords_x[i] * COORDUNIT;
-        pt->y = coords_y[i] * COORDUNIT;
+        pt->x = (((double) tmp / 2.0) + ((double) circle_rad * sin(angle)) + COORDMARGIN)
+                * COORDUNIT;
+        pt->y = (((double) tmp / 2.0) + ((double) circle_rad * cos(angle)) + COORDMARGIN)
+                * COORDUNIT;
         pt->d = 1;
+        LOG(("Assigned coordinates x:%ld, y:%ld and denominator %ld to minor point %ld\n",
+            pt->x, pt->y, pt->d, i));
     }
-    sfree(coords_x);
-    sfree(coords_y);
-    
+
     /* Add edges to the minor */
     vtcs_min = snewn(n_min, vertex);
-    vtcs_234 = newtree234(vertcmp);
-    edges_min_234 = newtree234(edgecmp);
     for (i = 0; i < n_min; i++)
     {
         vx = vtcs_min + i;
         vx->idx = i;
         vx->deg = 0;
-        add234(vtcs_234, vx);
     }
-    addedges(edges_min_234, vtcs_234, pts_min, n_min, n_min);
-    freetree234(vtcs_234);
+    edges_min_234 = newtree234(edgecmp);
+    addedges(edges_min_234, vtcs_min, NULL, pts_min, 0, n_min, -1, -1, n_min,
+            n_min - 1, rs);
 
     /*
-     * To get the orginal graph out of the minor we need to replace all points
-     * of the minor by subgraphs. To determine the areas in which we can place
-     * the subgraphs we need to find for every point of the minor the distance
-     * to its nearest neighbour. The distances are used to calculate the radii
-     * of circular subgraph areas around the minor points.
+     * To create the orginal graph we need to replace all minor points by subgraphs.
+     * To determine the areas in which we can place the subgraphs we need to know the
+     * shortest distance between any two adjacent minor points and for every point the
+     * shortest distance to the grid border. For every minor point the minimum of these
+     * two values is used to calculate the radius of a circular subgraph area around
+     * the minor point.
      */
-    tmp = COORDMARGIN_BASE * COORDUNIT;
-    tmp2 = (coord_lim - COORDMARGIN_BASE) * COORDUNIT;
+    tmp = COORDMARGIN * COORDUNIT;
+    tmp2 = (coord_lim - COORDMARGIN) * COORDUNIT;
     radii = snewn(n_min, long);
     for (i = 0; i < n_min; i++)
     {
         pt = pts_min + i;
-        radii[i] = min(min(pt->x - tmp, tmp2 - pt->x),
-                        min(pt->y - tmp, tmp2 - pt->y));
-    }
-    for (i = 0; i < n_min - 1; i++)
-    {
-        pt = pts_min + i;
-        for (j = i + 1; j < n_min; j++)
-        {
-            point* ptb = pts_min + j;
-            long dist = squarert(square(pt->x - ptb->x) + square(pt->y - ptb->y)) / 2;
-            if (dist < radii[i]) radii[i] = dist;
-            if (dist < radii[j]) radii[j] = dist;
-        }
+        radii[i] = (min(min(min(pt->x - tmp, pt->y - tmp), min(tmp2 - pt->x, tmp2 - pt->y)),
+                        squarert(square(pts_min[1].x - pts_min[0].x) + square(pts_min[1].y
+                        - pts_min[0].y))) / 2) - POINTRADIUS;
+        LOG(("Assigned subgraph radius %ld to subgraph %ld\n", radii[i], i));
     }
 
     /*
-     * Generate random coordinates for the subgraph points. The points of a
-     * subgraph must lie in the previously calculated circle with the cor-
-     * responding minor point as center and half the distance to the centers
-     * neirest neighbour as radius.
+     * Assign coordinates to the subgraphs. The coordinates must lie in the previously
+     * calculated subgraph areas.
      */
-    tmp = 2 * n_sub;
+    tmp = SUBGRAPH_POINT_ENTROPY * n_sub;
     angles = snewn(tmp, double);
-    pts_base = snewn(n_base, point);
     for (i = 0; i < tmp; i++)
     {
-        angles[i] = (double) i * (2.0 * PI) / (double) tmp;
+        angles[i] = ((double) i * 2.0 * PI) / (double) tmp;
     }
+    pts_base = snewn(n_base, point);
     for (i = 0; i < n_min; i++)
     {
         shuffle(angles, tmp, sizeof(double), rs);
         for (j = 0; j < n_sub; j++)
         {
-            long r = random_upto(rs, radii[i] - (3 * POINTRADIUS) + 1) + (2 * POINTRADIUS);
-            pt = pts_base + (i * n_sub) +j;
-            pt->x = pts_min[i].x + (r * sin(angles[j]));
-            pt->y = pts_min[i].y + (r * cos(angles[j]));
+            pt = pts_base + (i * n_sub) + j;
+            pt->x = (double) pts_min[i].x + ((double) radii[i] * sin(angles[j]));
+            pt->y = (double) pts_min[i].y + ((double) radii[i] * cos(angles[j]));
             pt->d = 1;
+            LOG(("Assigned coordinates x:%ld, y:%ld and denominator %ld to subgraph"\
+                " point %ld of subgraph %ld (base graph point %ld)\n", pt->x, pt->y, pt->d,
+                j, i, (i * n_sub) + j));
         }
     }
-    sfree(angles);
     sfree(radii);
+    sfree(angles);
 
     /* Add edges to the subgraphs */
     vtcs_base = snewn(n_base, vertex);
-    edges_base_234 = newtree234(edgecmp);
     for (i = 0; i < n_base; i++)
     {
         vx = vtcs_base + i;
         vx->idx = i;
         vx->deg = 0;
     }
+    edges_base_234 = newtree234(edgecmp);
     for (i = 0; i < n_min; i++)
     {
-        vtcs_234 = newtree234(vertcmp);
-        for (j = i * n_sub; j < (i + 1) * n_sub; j++)
-        {
-            add234(vtcs_234, vtcs_base + j);
-        }
-        addedges(edges_base_234, vtcs_234, pts_base, n_sub, n_min * n_sub);
-        freetree234(vtcs_234);
+        addedges(edges_base_234, vtcs_base, NULL, pts_base,  i * n_sub, n_sub, -1, -1,
+                n_min * n_sub, n_sub - 1, rs);
     }
 
-#if DEBUG
     /*
-     * Check whether all subgraph vertices are connected to another vertex of
-     * the same subgraph by at least one edge.
-     */
-    for (i = 0; i < n_min * n_sub; i++)
-    {
-        vx = vtcs_base + i;
-        assert(vx->deg > 0);
-    }
-#endif
-
-    /*
-     * Add edges between the subgraphs such that if the subgraphs would be replaced
-     * by the minor points again the outcome would be the minor graph. Also make sure
-     * that the edges don't cross existing ones. Therefore we just iterate over all
-     * vertices of the source and target subgraph respectively until we find a non-
-     * corssing edge. This works because the circular areas in which the subgraphs
-     * lie don't intersect. Hence there must exist a non-corssing edge between two
-     * subgraphs if the corresponding minor points share an edge.
+     * For every minor edge add an edge between random points of the subgraphs that
+     * correspond to the adjacent minor points.
      */
     for (i = 0; (e = index234(edges_min_234, i)) != NULL; i++)
     {
+#if DEBUG
+        bool added;
+#endif
+        edge __e;
+        __e.src = __e.tgt = -1;
         for (j = e->src * n_sub; j < (e->src + 1) * n_sub; j++)
         {
+            __e.src = j;
             for (k = e->tgt * n_sub; k < (e->tgt + 1) * n_sub; k++)
             {
-                edge* eb;
+                edge* ebase;
+                __e.tgt = k;
                 /* check for crossing edges */
-                for (l = 0; (eb = index234(edges_base_234, l)) != NULL; l++)
+                for (l = 0; (ebase = index234(edges_base_234, l)) != NULL; l++)
                 {
-                    if (j == e->src || j == eb->tgt || k == eb->src || k == eb->tgt)
+                    if (ebase->src == __e.src || ebase->tgt == __e.src
+                        || ebase->src == __e.tgt || ebase->tgt == __e.tgt)
                         continue;
-                    else if (cross(pts_base[j], pts_base[k], pts_base[eb->src], pts_base[eb->tgt]))
-                        goto next_vertex; /* the edge crosses another edge => next vertex */
+                    else if (cross(pts_base[__e.src], pts_base[__e.tgt],
+                                    pts_base[ebase->src], pts_base[ebase->tgt]))
+                        goto next_tgt; /* the edge crosses another edge => next tgt */
                 }
                 /* check for crossing points */
                 for (l = 0; l < n_min * n_sub; l++)
                 {
-                    if (j == l || k == l)
-                    {
+                    if (l == __e.src || l == __e.tgt)
                         continue;
-                    }
-                    else if (crosspoint(pts_base[l], pts_base[j], pts_base[k]))
-                    {
-                        goto next_vertex; /* this edge crosses a point => next vertex */
-                    }
+                    else if (crosspoint(pts_base[__e.src], pts_base[__e.tgt], pts_base[l]))
+                        goto next_tgt; /* this edge crosses a point => next tgt */
                 }
-                addedge(edges_base_234, j, k);
-                vtcs_base[j].deg++;
-                vtcs_base[k].deg++;
+                addedge(edges_base_234, __e.src, __e.tgt);
+                added = true;
+                LOG(("Added edge between subgraphs %d and %d (base graph vertices %d and %d)\n",
+                    e->src, e->tgt, __e.src, __e.tgt));
+                vtcs_base[__e.src].deg++;
+                vtcs_base[__e.tgt].deg++;
+                LOG(("Updated degrees of vertices %d to %d and %d to %d\n", vtcs_base[__e.src].idx,
+                    vtcs_base[__e.src].deg, vtcs_base[__e.tgt].idx, vtcs_base[__e.tgt].deg));
                 goto next_edge;
-                /*
-                 * For consistency I decided to use goto whenever it was possible.
-                 * This seemed to be the better of two evils. Here we just continue
-                 * the loop to get the next vertex.
-                 */
-                next_vertex:;
+                next_tgt:;
             }
         }
-        /*
-         * For consistency I decided to use goto whenever it was possible.
-         * This seemed to be the better of two evils. Here we just continue
-         * the loop to get the next edge.
-         */
-        next_edge:;
+        next_edge:
+#if DEBUG
+        assert(added);
+#else
+        ;
+#endif
     }
 
     /*
-     * Generate random coordinates for the remaining points. The coordinates will
-     * be in the following range:
-     * 
-     * [COORDMARGIN_BASE, coord_lim - COORDMARGIN_BASE]
+     * Assign coordinates to the remaining points. The coordinates may not overlay
+     * other points or edges.
      */
-    tmp = coord_lim - (2 * COORDMARGIN_BASE) + 1;
+    tmp = coord_lim - (2 * COORDMARGIN) + 1;
     coords_x = snewn(tmp, long);
     coords_y = snewn(tmp, long);
     for (i = 0; i < tmp; i++)
     {
-        coords_x[i] = i + COORDMARGIN_BASE;
-        coords_y[i] = i + COORDMARGIN_BASE;
+        coords_x[i] = (i + COORDMARGIN) * COORDUNIT;
+        coords_y[i] = (i + COORDMARGIN) * COORDUNIT;
     }
-    shuffle(coords_x, tmp, sizeof(*coords_x), rs);
-    shuffle(coords_y, tmp, sizeof(*coords_y), rs);
-
-    /* Assign random coordinates to the remaining points */
+    shuffle(coords_x, tmp, sizeof(long), rs);
+    shuffle(coords_y, tmp, sizeof(long), rs);
     tmp2 = n_min * n_sub;
     tmp3 = 0;
     for (i = 0; i < tmp; i++)
     {
         point p;
         p.d = 1;
-        p.x = coords_x[i] * COORDUNIT;
-        for (j = 0; j < tmp; j++)
+        p.x = coords_x[i];
+        p.y = coords_y[i];
+        /* check for an overlaying with an edge */
+        for (k = 0; (e = index234(edges_base_234, k)) != NULL; k++)
         {
-            p.y = coords_y[j] * COORDUNIT;
-            /* check for an overlaying with an edge */
-            for (k = 0; (e = index234(edges_base_234, k)) != NULL; k++)
-            {
-                if (crosspoint(p, pts_base[e->src], pts_base[e->tgt]))
-                    goto next_coord_y; /* the point overlays an edge => next y-coordinate */
-            }
-            /* check for an overlaying with a point */
-            for (k = 0; k < tmp2 + tmp3; k++)
-            {
-                pt = pts_base + k;
-                if (square(pt->x - p.x) + square(pt->y - p.y) < square((2 * POINTRADIUS) + 2))
-                    goto next_coord_y; /* the point overlays another point => next y-coordinate */
-            }
-            pt = pts_base + (tmp2 + tmp3++);
-            *pt = p;
-            goto next_coord_x; /* succesfully assigned coordinates => find next coordinate pair */
-            /*
-             * For consistency I decided to use goto whenever it was possible.
-             * This seemed to be the better of two evils. Here we just continue
-             * the loop to get the next y-coordinate.
-             */
-            next_coord_y:;
+            if (crosspoint(pts_base[e->src], pts_base[e->tgt], p))
+                goto next_coords; /* the point overlays an edge => next coords */
         }
-        /*
-         * For consistency I decided to use goto whenever it was possible.
-         * This seemed to be the better of two evils. Here we just continue
-         * the loop to get the next x-coordinate.
-         */
-        next_coord_x:
+        /* check for an overlaying with a point */
+        for (k = 0; k < tmp2 + tmp3; k++)
+        {
+            pt = pts_base + k;
+            if (square(pt->x - p.x) + square(pt->y - p.y) < square((2 * POINTRADIUS) + 2))
+                goto next_coords; /* the point overlays another point => next coords */
+        }
+        pt = pts_base + tmp2 + tmp3++;
+        *pt = p;
+        next_coords:
         if (tmp2 + tmp3 >= n_base) break;
     }
     sfree(coords_x);
     sfree(coords_y);
 
-    /* Add edges to the base graph including the remaining points */
-    vtcs_234 = newtree234(vertcmp);
-    for (i = 0; i < n_base; i++)
-    {
-        add234(vtcs_234, vtcs_base + i);
-    }
-    addedges(edges_base_234, vtcs_234, pts_base, n_base, n_base);
-    freetree234(vtcs_234);
+    /* Add edges to the remaining points */
+    addedges(edges_base_234, vtcs_base, vtcs_base, pts_base, 0, n_base, n_min * n_sub,
+            n_base - (n_min * n_sub), n_base, MAXDEGREE, rs);
 
     /*
      * The generation of a new game description is finished. Now we need to encode
      * the description in a dynamically allocated string and connect this string to
-     * the methods return value.
+     * the return value.
      */
     ret = NULL;
     {
@@ -1026,17 +979,15 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     edge* edges_base = snewn(count_base, edge);
 
     /*
-     * Calculate the length of the game description. The game description contains
-     * information about the points and edges of the minor and base graph. The points
-     * and edges are encoded like this:
+     * Calculate the length of the game description. It contains information about
+     * the points and edges of the minor and base graph. Points and edges are encoded
+     * in the following way:
      * 
      * (1) point: <index> - <degree> - <x coordinate> - <y coordinate>
      * (2) edge: <source index> - <target index>
      * 
-     * There we have our game description, a concatenation of encoded point and edge
-     * data followed by an encoding of the subgraph offsets. We have four collections
-     * of either points or edges that go into our description. The first two sets be-
-     * long to the minor, the latter two belong to the base graph.
+     * Single points or edges are separated by a comma while sets of points or edges
+     * are separated by a semicolon:
      * 
      * (1),(1),...;(2),(2),...;(1),(1),...;(2),(2);
      */
@@ -1064,14 +1015,14 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     }
 
     /*
-     * Allocate memory for len+1 chars, that is exactly the length of our game
+     * Allocate memory for len+1 chars, that is exactly the length of the game
      * description including a trailing '\0'.
      */
     ret = snewn(++len, char);
     
     /*
      * Now encode the game description and write it into the allocated string
-     * that will be connected to the methods return value.
+     * that will be connected to the return value.
      */
     for (i = 0; i < n_min - 1; i++)
     {
@@ -1117,7 +1068,7 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     sfree(edges_base);
     }
 
-    /* The aux string is not required. Therefore it is set to NULL. */
+    /* The aux string is not required and therefore it is set to NULL. */
     *aux = NULL;
 
     sfree(pts_min);
@@ -1206,7 +1157,7 @@ static const char *validate_desc(const game_params *params, const char *desc)
     const char* _desc = desc; /* pointer copy */
     const char* err;
     long g_size = COORDLIMIT(params->n_base) * COORDUNIT;
-    long g_margin = COORDMARGIN_BASE * COORDUNIT;
+    long g_margin = COORDMARGIN * COORDUNIT;
     if ((err = validate_graph(&_desc, params->n_min, g_size - g_margin, g_margin)) != NULL)
         return err;
     else if ((err = validate_graph(&_desc, params->n_base, g_size - g_margin, g_margin)) != NULL)
@@ -1324,7 +1275,7 @@ static game_state *new_game(midend *me, const game_params *params,
     game_state *state = snew(game_state);
     state->params = *params;
     long g_size = COORDLIMIT(params->n_base) * COORDUNIT;
-    long g_margin = COORDMARGIN_BASE * COORDUNIT;
+    long g_margin = COORDMARGIN * COORDUNIT;
     state->minor = parse_graph(&_desc, GRID_LEFT, params->n_min, g_size - g_margin, g_margin);
     state->base = parse_graph(&_desc, GRID_RIGHT, params->n_base, g_size - g_margin, g_margin);
     state->solved = false;
@@ -1522,7 +1473,7 @@ static game_ui *new_ui(const game_state *state)
 {
     game_ui* ret = snew(game_ui);
     ret->g_size = COORDLIMIT(state->params.n_base) * COORDUNIT;
-    ret->g_margin = COORDMARGIN_BASE * COORDUNIT;
+    ret->g_margin = COORDMARGIN * COORDUNIT;
     ret->width = NGRIDS * ret->g_size;
     ret->height = ret->g_size;
     ret->newpt.d = 1;
@@ -1618,8 +1569,7 @@ static char *interpret_move(const game_state *state, game_ui *ui,
         vertex* vx;
         edge beste;
         edge* e;
-        beste.src = -1;
-        beste.tgt = -1;
+        beste.src = beste.tgt = -1;
 
         /*
          * Get the index of the point with the shortest point heuristic. Do only take points
@@ -1896,8 +1846,8 @@ static bool find_isomorphism(const graph* the_graph, const graph* cmp_graph)
     {
         vtcs_cmp[i] = *vx;
     }
-    qsort(vtcs_the, nvtcs, sizeof(vertex), vertcmpC2);
-    qsort(vtcs_cmp, nvtcs, sizeof(vertex), vertcmpC2);
+    qsort(vtcs_the, nvtcs, sizeof(vertex), vertcmpC);
+    qsort(vtcs_cmp, nvtcs, sizeof(vertex), vertcmpC);
     tmp = 1;
     for (i = 0; i < nvtcs; i++)
     {
