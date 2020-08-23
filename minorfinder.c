@@ -54,6 +54,7 @@ enum {
     COL_FLASH,
     COL_FLASH2,
     COL_TEXT,
+    COL_TEXTBACKGROUND,
 #if DEBUG
     COL_SUBPOINT,
 #endif
@@ -585,7 +586,6 @@ static int vertcmp(void *av, void *bv)
  * 
  */
 
-#define MAXDEGREE 6
 #define POINTRADIUS 6
 #define POINT_CROSSCHECK_ACCURACY 50
 
@@ -618,45 +618,44 @@ static bool crosspoint(point s, point t, point p)
  * Add edges between the vertices. Make sure that edges don't cross and that the degree of
  * the vertices doesn't increase beyond MAXDEGREE.
  */
-static void addedges(tree234* edges, vertex* src_vertices, vertex* tgt_vertices, point* points,
-                    const int __off_src_vtcs, const int __n_src_vtcs, const int __off_tgt_vtcs,
-                    const int __n_tgt_vtcs, const int n_pts, const int max_deg, random_state* rs)
+static void addedges(tree234* edges, vertex* vertices, point* points,
+                    const int off_src_vtcs, const int n_src_vtcs, const int __off_tgt_vtcs,
+                    const int __n_tgt_vtcs, const int n_pts, const int __max_deg, random_state* rs)
 {
     int i, j, k;
     int off_tgt_vtcs;
     int n_tgt_vtcs;
+    int max_deg;
     vertex* vxa;
     vertex* vxb;
     vertex** src_vtcs;
     vertex** tgt_vtcs;
     edge* e;
 
-    src_vtcs = snewn(__n_src_vtcs, vertex*);
-    for (i = 0; i < __n_src_vtcs; i++)
+    src_vtcs = snewn(n_src_vtcs, vertex*);
+    for (i = 0; i < n_src_vtcs; i++)
     {
-        src_vtcs[i] = src_vertices + __off_src_vtcs + i;
+        src_vtcs[i] = vertices + off_src_vtcs + i;
     }
-    shuffle(src_vtcs, __n_src_vtcs, sizeof(vertex*), rs);
+    shuffle(src_vtcs, n_src_vtcs, sizeof(vertex*), rs);
 
-    if (!tgt_vertices)
+    if (__off_tgt_vtcs < 0) off_tgt_vtcs = off_src_vtcs;
+    else off_tgt_vtcs = __off_tgt_vtcs;
+
+    if (__n_tgt_vtcs < 0) n_tgt_vtcs = n_src_vtcs;
+    else n_tgt_vtcs = __n_tgt_vtcs;
+
+    tgt_vtcs = snewn(n_tgt_vtcs, vertex*);
+    for (i = 0; i < n_tgt_vtcs; i++)
     {
-        off_tgt_vtcs = __off_src_vtcs;
-        n_tgt_vtcs = __n_src_vtcs;
-        tgt_vtcs = src_vtcs;
+        tgt_vtcs[i] = vertices + off_tgt_vtcs + i;
     }
-    else
-    {
-        off_tgt_vtcs = __off_tgt_vtcs;
-        n_tgt_vtcs = __n_tgt_vtcs;
-        tgt_vtcs = snewn(n_tgt_vtcs, vertex*);
-        for (i = 0; i < n_tgt_vtcs; i++)
-        {
-            tgt_vtcs[i] = tgt_vertices + off_tgt_vtcs + i;
-        }
-        shuffle(tgt_vtcs, n_tgt_vtcs, sizeof(vertex*), rs);
-    }
+    shuffle(tgt_vtcs, n_tgt_vtcs, sizeof(vertex*), rs);
+
+    if (__max_deg < 0) max_deg = max(n_src_vtcs, n_tgt_vtcs) - 1;
+    else max_deg = __max_deg;
     
-    for (i = 0; i < __n_src_vtcs; i++)
+    for (i = 0; i < n_src_vtcs; i++)
     {
         vxa = src_vtcs[i];
         
@@ -718,7 +717,7 @@ static void addedges(tree234* edges, vertex* src_vertices, vertex* tgt_vertices,
     }
 
     sfree(src_vtcs);
-    if (tgt_vertices) sfree(tgt_vtcs);
+    sfree(tgt_vtcs);
 }
 
 /*
@@ -793,8 +792,7 @@ static char *new_game_desc(const game_params *params, random_state *rs,
         vx->deg = 0;
     }
     edges_min_234 = newtree234(edgecmp);
-    addedges(edges_min_234, vtcs_min, NULL, pts_min, 0, n_min, -1, -1, n_min,
-            n_min - 1, rs);
+    addedges(edges_min_234, vtcs_min, pts_min, 0, n_min, -1, -1, n_min, -1, rs);
 
     /*
      * To create the orginal graph we need to replace all minor points by subgraphs.
@@ -855,8 +853,8 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     edges_base_234 = newtree234(edgecmp);
     for (i = 0; i < n_min; i++)
     {
-        addedges(edges_base_234, vtcs_base, NULL, pts_base,  i * n_sub, n_sub, -1, -1,
-                n_min * n_sub, n_sub - 1, rs);
+        addedges(edges_base_234, vtcs_base, pts_base,  i * n_sub, n_sub, -1, -1,
+                n_min * n_sub, -1, rs);
     }
 
     /*
@@ -896,7 +894,9 @@ static char *new_game_desc(const game_params *params, random_state *rs,
                         goto next_tgt; /* this edge crosses a point => next tgt */
                 }
                 addedge(edges_base_234, __e.src, __e.tgt);
+#if DEBUG
                 added = true;
+#endif
                 LOG(("Added edge between subgraphs %d and %d (base graph vertices %d and %d)\n",
                     e->src, e->tgt, __e.src, __e.tgt));
                 vtcs_base[__e.src].deg++;
@@ -954,15 +954,23 @@ static char *new_game_desc(const game_params *params, random_state *rs,
         *pt = p;
         LOG(("Assigned coordinates x:%ld, y:%ld and denominator %ld to base graph point %ld\n",
             pt->x, pt->y, pt->d, tmp2 + tmp3 - 1));
-        next_coords:
         if (tmp2 + tmp3 >= n_base) break;
+        next_coords:;
     }
     sfree(coords_x);
     sfree(coords_y);
 
     /* Add edges to the remaining points */
-    addedges(edges_base_234, vtcs_base, vtcs_base, pts_base, 0, n_base, n_min * n_sub,
-            n_base - (n_min * n_sub), n_base, MAXDEGREE, rs);
+    addedges(edges_base_234, vtcs_base, pts_base, 0, n_base, n_min * n_sub,
+            n_base - (n_min * n_sub), n_base, -1, rs);
+
+#if DEBUG
+    for (i = n_min * n_sub; i < n_base; i++)
+    {
+        vx = vtcs_base + i;
+        assert(vx->deg > 0);
+    }
+#endif
 
     /*
      * The generation of a new game description is finished. Now we need to encode
@@ -2126,6 +2134,11 @@ static float *game_colours(frontend *fe, int *ncolours)
     ret[(COL_TEXT * 3) + 1] = 0.1F;
     ret[(COL_TEXT * 3) + 2] = 0.1F;
 
+    /* light grey */
+    ret[(COL_TEXTBACKGROUND * 3) + 0] = 0.7F;
+    ret[(COL_TEXTBACKGROUND * 3) + 1] = 0.7F;
+    ret[(COL_TEXTBACKGROUND * 3) + 2] = 0.7F;
+
 #if DEBUG
     /* cyan */
     ret[(COL_SUBPOINT * 3) + 0] = 0.0F;
@@ -2186,16 +2199,21 @@ static void game_redraw(drawing *dr, game_drawstate *ds,
      * should start by drawing a big background-colour rectangle
      * covering the whole window.
      */
-    draw_rect(dr, 0, 0, ui->width, ui->height + ds->headline_height, bg_color);
+    draw_rect(dr, 0, ds->headline_height, ui->width, ui->height, bg_color);
 
     /*
-     * Draw an outline around the area where the game is drawn and
-     * separate the two grids for the base graph and minor by a thick
-     * line.
+     * Draw the headline area and draw an outline around the area where
+     * the game is drawn. Separate the two grids for the base graph and
+     * minor from each other and separate the headline area from the two
+     * grids by thick lines.
      */
+    draw_rect(dr, 0, 0, ui->width, ds->headline_height, COL_TEXTBACKGROUND);
     draw_rect_outline(dr, 0, 0, ui->width, ui->height + ds->headline_height, COL_OUTLINE);
     draw_thick_line(dr, 2.0F, (float) ui->g_size, 0.0F, (float) ui->g_size,
-                        (float) ui->g_size + ds->headline_height, COL_GRIDBORDER);
+                    (float) ui->g_size + ds->headline_height, COL_GRIDBORDER);
+    draw_thick_line(dr, 2.0F, 0.0F, (float) ds->headline_height, (float) ui->width,
+                    (float) ds->headline_height, COL_GRIDBORDER);
+    
     /*
      * Draw texts that make clear which of the two grids belongs to
      * the base graph and which to the minor.
