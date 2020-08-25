@@ -1,14 +1,9 @@
 /*
- * nullgame.c [FIXME]: Template defining the null game (in which no
- * moves are permitted and nothing is ever drawn). This file exists
- * solely as a basis for constructing new game definitions - it
- * helps to have something which will compile from the word go and
- * merely doesn't _do_ very much yet.
- * 
- * Parts labelled FIXME actually want _removing_ (e.g. the dummy
- * field in each of the required data structures, and this entire
- * comment itself) when converting this source file into one
- * describing a real game.
+ * minorfinder.c: Game about finding a specific minor in a bigger
+ * graph. To extract the minor from the bigger graph the player
+ * can either contract edges, delete edges or delete vertices with
+ * degree zero, i.e. vertices that aren't adjacent to any other
+ * vertices of the graph.
  */
 
 #include <stdio.h>
@@ -24,24 +19,20 @@
 /* debug mode */
 #define DEBUG true
 
+/* enable or disable console log */
 #if DEBUG
-/* console log */
 #define LOG(x) (printf x)
 #else
-/* no log */
 #define LOG(x)
 #endif
 
-/* type alias for an unsigned char */
+/* type aliases */
 #define uint8 unsigned char
-
-/* type alias for an unsigned integer */
 #define uint unsigned int
-
-/* type alias for an unsigned long */
 #define ulong unsigned long
 
 enum {
+    COL_SYSBACKGROUND,
     COL_BACKGROUND,
     COL_OUTLINE,
     COL_GRIDBORDER,
@@ -123,7 +114,10 @@ typedef struct graph {
     /* number of references to the graph - for deallocation */
     int refcount;
 
-    /* the grid in which the graph is drawn - determines its coordinate offset */
+    /*
+     * the grid in which the graph is drawn - determines its coordinate
+     * offset
+     */
     enum grid grid;
 
     /* array of points - remains the same throughout the game */
@@ -271,15 +265,11 @@ static game_params *custom_params(const config_item *cfg)
 
 static const char *validate_params(const game_params *params, bool full)
 {
-    if (params->n_base < DEFAULT_N_BASE)
-        return "Number of base graph points is too low";
-    if (params->n_min < DEFAULT_N_MIN)
-        return "Number of minor points is too low";
-    /*
-     * TODO:
-     * If we experience performance issues we could also think of an upper limit
-     * for our params.
-     */
+    if (params->n_base < DEFAULT_N_BASE || params->n_base > 30)
+        return "Number of base graph points is invalid";
+    if (params->n_min < DEFAULT_N_MIN || params->n_min > 15)
+        return "Number of minor points is invalid";
+    
     return NULL;
 }
 
@@ -615,108 +605,186 @@ static bool crosspoint(point s, point t, point p)
 }
 
 /*
- * Add edges between the vertices. Make sure that edges don't cross and that the degree of
- * the vertices doesn't increase beyond MAXDEGREE.
+ * Add edges between the vertices in the source range and vertices in the target range.
+ * Make sure that edges don't cross other edges or points and the degree of the involved
+ * vertices doesn't increase beyond __max_deg.
  */
-static void addedges(tree234* edges, vertex* vertices, point* points,
-                    const int off_src_vtcs, const int n_src_vtcs, const int __off_tgt_vtcs,
-                    const int __n_tgt_vtcs, const int n_pts, const int __max_deg, random_state* rs)
+static void addedges(tree234* edges, vertex* vertices, point* points, const int __off_src_vtcs,
+                    const int __n_src_vtcs, const int __off_tgt_vtcs, const int __n_tgt_vtcs,
+                    const int n_pts, const int __max_deg, random_state* rs)
 {
-    int i, j, k;
+    bool* contains;
+    int i, j;
+    int off_src_vtcs;
+    int n_src_vtcs;
     int off_tgt_vtcs;
     int n_tgt_vtcs;
     int max_deg;
     vertex* vxa;
     vertex* vxb;
-    vertex** src_vtcs;
-    vertex** tgt_vtcs;
+    tree234* vtcs;
+    tree234* src_vtcs;
+    tree234** tgt_vtcs;
     edge* e;
 
-    src_vtcs = snewn(n_src_vtcs, vertex*);
-    for (i = 0; i < n_src_vtcs; i++)
+    if (__off_src_vtcs <= __off_tgt_vtcs)
     {
-        src_vtcs[i] = vertices + off_src_vtcs + i;
+        off_src_vtcs = __off_src_vtcs;
+        n_src_vtcs = __n_src_vtcs;
+        off_tgt_vtcs = __off_tgt_vtcs;
+        n_tgt_vtcs = __n_tgt_vtcs;
     }
-    shuffle(src_vtcs, n_src_vtcs, sizeof(vertex*), rs);
-
-    if (__off_tgt_vtcs < 0) off_tgt_vtcs = off_src_vtcs;
-    else off_tgt_vtcs = __off_tgt_vtcs;
-
-    if (__n_tgt_vtcs < 0) n_tgt_vtcs = n_src_vtcs;
-    else n_tgt_vtcs = __n_tgt_vtcs;
-
-    tgt_vtcs = snewn(n_tgt_vtcs, vertex*);
-    for (i = 0; i < n_tgt_vtcs; i++)
+    else
     {
-        tgt_vtcs[i] = vertices + off_tgt_vtcs + i;
+        off_src_vtcs = __off_tgt_vtcs;
+        n_src_vtcs = __n_tgt_vtcs;
+        off_tgt_vtcs = __off_src_vtcs;
+        n_tgt_vtcs = __n_src_vtcs;
     }
-    shuffle(tgt_vtcs, n_tgt_vtcs, sizeof(vertex*), rs);
-
+    if (n_src_vtcs < 0)
+        n_src_vtcs = off_tgt_vtcs + n_tgt_vtcs - off_src_vtcs;
+    else if (n_tgt_vtcs < 0)
+        n_tgt_vtcs = off_src_vtcs + n_src_vtcs - off_tgt_vtcs;
     if (__max_deg < 0) max_deg = max(n_src_vtcs, n_tgt_vtcs) - 1;
     else max_deg = __max_deg;
-    
-    for (i = 0; i < n_src_vtcs; i++)
+
+    /* add all source vertices to a 234-tree */
+    src_vtcs = newtree234(vertcmp);
+    LOG(("Initially added vertices "));
+    for (i = off_src_vtcs; i < off_src_vtcs + n_src_vtcs; i++)
     {
-        vxa = src_vtcs[i];
-        
-        for (j = 0; j < n_tgt_vtcs; j++)
+        add234(src_vtcs, vertices + i);
+        LOG(("%d, ", vertices[i].idx));
+    }
+    LOG(("to source vertices\n"));
+
+    /* for every source vertex add all target vertices to a 234-tree */
+    tgt_vtcs = snewn(n_src_vtcs, tree234*);
+    *tgt_vtcs = newtree234(vertcmp);
+    LOG(("Initially added vertices "));
+    for (i = off_tgt_vtcs; i < off_tgt_vtcs + n_tgt_vtcs; i++)
+    {
+        add234(*tgt_vtcs, vertices + i);
+        LOG(("%d, ", vertices[i].idx));
+    }
+    LOG(("to target vertices\n"));
+    for (i = 1; i < n_src_vtcs; i++)
+    {
+        tgt_vtcs[i] = copytree234(*tgt_vtcs, NULL, NULL);
+#if DEBUG
+        assert(count234(tgt_vtcs[i]) == count234(*tgt_vtcs));
+        for (j = 0; j < count234(tgt_vtcs[i]); j++)
         {
-            vxb = tgt_vtcs[j];
-            LOG(("Trying to add edge between vertices %d and %d\n", vxa->idx, vxb->idx));
-
-            if (vxb->idx <= vxa->idx || vxb->deg >= max_deg)
-            {
-                LOG(("The edge %d-%d can't be added\n", vxa->idx, vxb->idx));
-                continue;
-            }
-            else if (isedge(edges, vxa->idx, vxb->idx))
-            {
-                LOG(("The edge %d-%d does already exist\n", vxa->idx, vxb->idx));
-                continue;
-            }
-            /* check for crossing edges */
-            for (k = 0; (e = index234(edges, k)) != NULL; k++)
-            {
-                if (vxa->idx == e->src || vxa->idx == e->tgt || vxb->idx == e->src ||
-                    vxb->idx == e->tgt)
-                {
-                    continue;
-                }
-                else if (cross(points[vxa->idx], points[vxb->idx], points[e->src],
-                                points[e->tgt]))
-                {
-                    LOG(("The edge %d-%d crosses the edge %d-%d\n", vxa->idx, vxb->idx,
-                        e->src, e->tgt));
-                    goto next_vxb; /* this edge crosses another edge => next vxb */
-                }
-            }
-            /* check for crossing points */
-            for (k = 0; k < n_pts; k++)
-            {
-                if (k == vxa->idx || k == vxb->idx)
-                {
-                    continue;
-                }
-                else if (crosspoint(points[vxa->idx], points[vxb->idx], points[k]))
-                {
-                    LOG(("The edge %d-%d crosses the point %d\n", vxa->idx, vxb->idx, j));
-                    goto next_vxb; /* this edge crosses a point => next vxb */
-                }
-            }
-
-            addedge(edges, vxa->idx, vxb->idx);
-            LOG(("Added edge between vertices %d and %d\n", vxa->idx, vxb->idx));
-            vxa->deg++;
-            vxb->deg++;
-            LOG(("Updated degrees of vertices %d to %d and %d to %d\n", vxa->idx, vxa->deg,
-                vxb->idx, vxb->deg));
-            if (vxa->deg >= max_deg) break;
-
-            next_vxb:;
+            vxa = index234(tgt_vtcs[i], j);
+            vxb = index234(*tgt_vtcs, j);
+            assert(vxa->idx == vxb->idx);
         }
+#endif
+    }
+    
+    /*
+     * Start adding edges. Randomly pick two vertices and try to add an edge between them.
+     * If the edge can't be added delete the target vertex from the corresponding target
+     * 234-tree. Otherwise add the edge and update the involved vertices in the source
+     * 234-tree and all target 234-trees. Repeat until there are no more edges to add.
+     */
+    while (count234(src_vtcs))
+    {
+        vxa = index234(src_vtcs, random_upto(rs, count234(src_vtcs)));
+        vtcs = tgt_vtcs[vxa->idx - off_src_vtcs];
+        if (!count234(vtcs))
+        {
+            del234(src_vtcs, vxa);
+            LOG(("Removed vertex %d from source vertices, no more edges to add\n",
+                vxa->idx));
+            continue;
+        }
+        vxb = index234(vtcs, random_upto(rs, count234(vtcs)));
+        LOG(("Trying to add edge between vertices %d and %d\n", vxa->idx, vxb->idx));
+
+        if (vxb->idx <= vxa->idx)
+        {
+            del234(vtcs, vxb);
+            LOG(("Removed vertex %d from target vertices of vertex %d,"\
+                " the edge can't be added\n", vxb->idx, vxa->idx));
+            continue;
+        }
+        /* check for crossing edges */
+        for (i = 0; (e = index234(edges, i)) != NULL; i++)
+        {
+            if (vxa->idx == e->src || vxa->idx == e->tgt || vxb->idx == e->src ||
+                vxb->idx == e->tgt)
+            {
+                continue;
+            }
+            else if (cross(points[vxa->idx], points[vxb->idx], points[e->src],
+                            points[e->tgt]))
+            {
+                del234(vtcs, vxb);
+                LOG(("Removed vertex %d from target vertices of vertex %d,"\
+                    " the edge crosses the edge %d-%d\n", vxb->idx, vxa->idx,
+                    e->src, e->tgt));
+                goto next_vertices; /* this edge crosses another edge => next vertex pair */
+            }
+        }
+        /* check for crossing points */
+        for (i = 0; i < n_pts; i++)
+        {
+            if (i == vxa->idx || i == vxb->idx)
+            {
+                continue;
+            }
+            else if (crosspoint(points[vxa->idx], points[vxb->idx], points[i]))
+            {
+                del234(vtcs, vxb);
+                LOG(("Removed vertex %d from target vertices of vertex %d,"\
+                    " the edge crosses the point %d\n", vxb->idx, vxa->idx, i));
+                goto next_vertices; /* this edge crosses a point => next vertex pair */
+            }
+        }
+
+        addedge(edges, vxa->idx, vxb->idx);
+        LOG(("Added edge between vertices %d and %d\n", vxa->idx, vxb->idx));
+        contains = snewn(n_src_vtcs, bool);
+        del234(src_vtcs, vxa);
+        for (i = 0; i < n_src_vtcs; i++)
+        {
+            contains[i] = del234(tgt_vtcs[i], vxa);
+        }
+        vxa->deg++;
+        if (vxa->deg < max_deg)
+        {
+            add234(src_vtcs, vxa);
+            for (i = 0; i < n_src_vtcs; i++)
+            {
+                if (contains[i]) add234(tgt_vtcs[i], vxa);
+            }
+        }
+        contains = sresize(contains, n_src_vtcs + 1, bool);
+        *contains = del234(src_vtcs, vxb);
+        for (i = 0; i < n_src_vtcs; i++)
+        {
+            contains[i+1] = del234(tgt_vtcs[i], vxb);
+        }
+        vxb->deg++;
+        if (vxb->deg < max_deg)
+        {
+            if (*contains) add234(src_vtcs, vxb);
+            for (i = 0; i < n_src_vtcs; i++)
+            {
+                if (contains[i+1] && i != vxa->idx - off_src_vtcs)
+                    add234(tgt_vtcs[i], vxb);
+            }
+        }
+        sfree(contains);
+        LOG(("Updated degrees of vertices %d to %d and %d to %d\n", vxa->idx, vxa->deg,
+            vxb->idx, vxb->deg));
+
+        next_vertices:;
     }
 
-    sfree(src_vtcs);
+    freetree234(src_vtcs);
+    for (i = 0; i < n_src_vtcs; i++) freetree234(tgt_vtcs[i]);
     sfree(tgt_vtcs);
 }
 
@@ -792,7 +860,7 @@ static char *new_game_desc(const game_params *params, random_state *rs,
         vx->deg = 0;
     }
     edges_min_234 = newtree234(edgecmp);
-    addedges(edges_min_234, vtcs_min, pts_min, 0, n_min, -1, -1, n_min, -1, rs);
+    addedges(edges_min_234, vtcs_min, pts_min, 0, n_min, 0, -1, n_min, -1, rs);
 
     /*
      * To create the orginal graph we need to replace all minor points by subgraphs.
@@ -853,7 +921,7 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     edges_base_234 = newtree234(edgecmp);
     for (i = 0; i < n_min; i++)
     {
-        addedges(edges_base_234, vtcs_base, pts_base,  i * n_sub, n_sub, -1, -1,
+        addedges(edges_base_234, vtcs_base, pts_base,  i * n_sub, n_sub, i * n_sub, -1,
                 n_min * n_sub, -1, rs);
     }
 
@@ -961,8 +1029,7 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     sfree(coords_y);
 
     /* Add edges to the remaining points */
-    addedges(edges_base_234, vtcs_base, pts_base, 0, n_base, n_min * n_sub,
-            n_base - (n_min * n_sub), n_base, -1, rs);
+    addedges(edges_base_234, vtcs_base, pts_base, 0, n_base, n_min * n_sub, -1, n_base, -1, rs);
 
 #if DEBUG
     for (i = n_min * n_sub; i < n_base; i++)
@@ -1078,7 +1145,7 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     sfree(edges_base);
     }
 
-    /* The aux string is not required and therefore it is set to NULL. */
+    /* The aux string is not required and therefore it is set to NULL */
     *aux = NULL;
 
     sfree(pts_min);
@@ -1095,8 +1162,8 @@ static char *new_game_desc(const game_params *params, random_state *rs,
 
 /*
  * Validate a graph description, i.e. a string that specifies a set of points by
- * their index and position and a set of edges between those points by the point
- * indices of their incident vertices.
+ * their index position and degree and a set of edges between those points by the
+ * point indices of their incident vertices.
  */
 static const char* validate_graph(const char** desc, int n, long lim, long mar)
 {
@@ -1178,8 +1245,8 @@ static const char *validate_desc(const game_params *params, const char *desc)
 
 /*
  * Parse a graph description, i.e. a string that specifies a set of points by their
- * index and position and a set of edges between those points by the point indices
- * of their incident vertices.
+ * index, position and degree and a set of edges between those points by the point
+ * indices of their incident vertices.
  */
 static graph* parse_graph(const char** desc, enum grid grid, int n, long lim, long mar)
 {
@@ -1377,8 +1444,8 @@ static void free_game(game_state *state)
 }
 
 /*
- * Replace the given edge in the given edge 234-tree. The new edge will have
- * new_src and new_tgt as source and target respetively.
+ * Replace the given edge in the given edge 234-tree. The new edge will have new_src
+ * and new_tgt as source and target respetively.
  */
 static void replace_edge(tree234* edges, edge* e, tree234* vertices, vertex* vtcs,
                         int new_src, int new_tgt)
@@ -1410,8 +1477,8 @@ static void replace_edge(tree234* edges, edge* e, tree234* vertices, vertex* vtc
 }
 
 /* 
- * Contract an edge from a graph, i.e. merge its incident vertices such that
- * no edges are lost except for the contracted edge itself.
+ * Contract an edge from a graph, i.e. merge its incident vertices such that no edges
+ * are lost except for the contracted edge itself.
  */
 static void contract_edge(graph* graph, int dom, int rec)
 {
@@ -1455,14 +1522,6 @@ static char *game_text_format(const game_state *state)
 
 struct game_ui {
 
-    /* grid size */
-    long g_size;
-    /* grid margin*/
-    long g_margin;
-
-    /* game window size */
-    long width, height;
-
     /* new position of the drag point */
     point newpt;
     /* index of the drag point */
@@ -1482,10 +1541,6 @@ struct game_ui {
 static game_ui *new_ui(const game_state *state)
 {
     game_ui* ret = snew(game_ui);
-    ret->g_size = COORDLIMIT(state->params.n_base) * COORDUNIT;
-    ret->g_margin = COORDMARGIN * COORDUNIT;
-    ret->width = NGRIDS * ret->g_size;
-    ret->height = ret->g_size;
     ret->newpt.d = 1;
     ret->dragpt = -1;
     ret->mergept_dom = -1;
@@ -1526,11 +1581,17 @@ static void game_changed_state(game_ui *ui, const game_state *oldstate,
     }
 }
 
-#define HEADLINE_HEIGHT 32
-
 struct game_drawstate {
 
     int tilesize;
+
+    /* grid size */
+    long g_size;
+    /* grid margin*/
+    long g_margin;
+
+    /* game window size */
+    long width, height;
 
     long headline_height;
 
@@ -1561,10 +1622,11 @@ static char *interpret_move(const game_state *state, game_ui *ui,
     /*
      * Since one can only perform moves on the base graph which is placed in GRID_RIGHT
      * and the point coordinates of a graph are given in relation to its grid one needs
-     * to subtract the grid size from the x-coordinate of the mouse event.
+     * to subtract the grid size from the x-coordinate of the mouse event. Make sure the
+     * coordinates are correct, even if the player resizes the window.
      */
-    x -= state->base->grid * ui->g_size;
-    y -= ds->headline_height;
+    long realx = (x - (state->base->grid * ds->g_size)) * COORDUNIT / ds->tilesize;
+    long realy = (y - ds->headline_height) * COORDUNIT / ds->tilesize;
 
     if (IS_MOUSE_DOWN(button))
     {
@@ -1589,7 +1651,7 @@ static char *interpret_move(const game_state *state, game_ui *ui,
         for (i = 0; (vx = index234(state->base->vertices, i)) != NULL; i++)
         {
             pt = pts + vx->idx;
-            ptheur = point_heuristic(pt->x, pt->y, x, y);
+            ptheur = point_heuristic(pt->x, pt->y, realx, realy);
             if (ptheur < best_ptheur)
             {
                 best_ptheur = ptheur;
@@ -1604,7 +1666,7 @@ static char *interpret_move(const game_state *state, game_ui *ui,
         for (i = 0; (e = index234(state->base->edges, i)) != NULL; i++)
         {
             eheur = edge_heuristic(pts[e->src].x, pts[e->src].y, pts[e->tgt].x,
-                                    pts[e->tgt].y, x, y);
+                                    pts[e->tgt].y, realx, realy);
             if (eheur < best_eheur)
             {
                 best_eheur = eheur;
@@ -1618,8 +1680,8 @@ static char *interpret_move(const game_state *state, game_ui *ui,
         */
         if (best_ptheur < POINT_TRESHOLD)
         {
-            ui->newpt.x = x;
-            ui->newpt.y = y;
+            ui->newpt.x = realx;
+            ui->newpt.y = realy;
             ui->dragpt = best_ptidx;
             return UI_UPDATE;
         }
@@ -1649,8 +1711,8 @@ static char *interpret_move(const game_state *state, game_ui *ui,
         /* Check for an ongoing drag. If yes => game_ui requires update. */
         if (ui->dragpt != -1)
         {
-            ui->newpt.x = x;
-            ui->newpt.y = y;
+            ui->newpt.x = realx;
+            ui->newpt.y = realy;
             return UI_UPDATE;
         }
     }
@@ -1662,8 +1724,8 @@ static char *interpret_move(const game_state *state, game_ui *ui,
          */
         if (ui->dragpt != -1)
         {
-            if (ui->newpt.x < 0 || ui->newpt.x > ui->g_size ||
-                ui->newpt.y < 0 || ui->newpt.y > ui->g_size)
+            if (ui->newpt.x < 0 || ui->newpt.x > ds->g_size * COORDUNIT / ds->tilesize ||
+                ui->newpt.y < 0 || ui->newpt.y > ds->g_size * COORDUNIT / ds->tilesize)
             {
                 ui->dragpt = -1;
                 return UI_UPDATE;
@@ -1678,11 +1740,15 @@ static char *interpret_move(const game_state *state, game_ui *ui,
         }
         /*
          * Check for an ongoing contraction. If yes, check whether the player wants
-         * to discard the drag. If no => make move, else => discard and update game_ui.
+         * to discard the contraction. If no => make move, else => discard and update
+         * game_ui.
          */
         else if (ui->mergept_rec != -1 && ui->mergept_dom != -1)
         {
-            if (x < 0 || x > ui->g_size || y < 0 || y > ui->g_size)
+            if (x < state->base->grid * ds->g_size
+                || x > (state->base->grid * ds->g_size) + ds->g_size
+                || y < ds->headline_height
+                || y > ds->headline_height + ds->g_size)
             {
                 ui->mergept_rec = -1;
                 ui->mergept_dom = -1;
@@ -1701,11 +1767,11 @@ static char *interpret_move(const game_state *state, game_ui *ui,
     return NULL;
 }
 
-typedef struct node node;
-
 /*
  * A node of a graph isomorphism search tree
  */
+typedef struct node node;
+
 struct node {
     node* children;
     vertex** cells;
@@ -1716,9 +1782,8 @@ struct node {
 };
 
 /*
- * Expand a node in an isomorphism search tree or if it is a leaf parse it
- * into a permutation that is candidate to be an isomorphism between two
- * graphs.
+ * Expand a node in an isomorphism search tree or if it is a leaf parse it into a
+ * permutation that is candidate to be an isomorphism between two graphs.
  */
 static vertex* expand_node(node* n)
 {
@@ -1795,8 +1860,8 @@ static vertex* expand_node(node* n)
 }
 
 /*
- * Free a node structure and all its child nodes recursively. Do only free
- * the node itself if it is the root node of an isomorphism search tree.
+ * Free a node structure and all its child nodes recursively. Do only free the node
+ * itself if it is the root node of an isomorphism search tree.
  */
 static void free_node(node* n, bool isroot)
 {
@@ -1817,10 +1882,9 @@ static void free_node(node* n, bool isroot)
 }
 
 /*
- * Check whether there exists an isomorphism between a test graph and a
- * comparison graph. The algorithm builds on the idea that vertices with
- * different degree can't be a vertex pair of a permutation that is an
- * isomorphism between two graphs.
+ * Check whether there exists an isomorphism between a test graph and a comparison
+ * graph. The algorithm builds on the idea that vertices with different degree can't
+ * be a vertex pair of a permutation that is an isomorphism between two graphs.
  */
 static bool find_isomorphism(const graph* the_graph, const graph* cmp_graph)
 {
@@ -1931,7 +1995,7 @@ static bool find_isomorphism(const graph* the_graph, const graph* cmp_graph)
     while (tmp)
     {
         n = delpos234(lifo, --tmp);
-        LOG(("Fetched node at position %d from the lifo queue\n", tmp + 1));
+        LOG(("Fetched node at position %d from the lifo queue\n", tmp));
         if((permu = expand_node(n)))
         {
             int map[80];
@@ -1939,11 +2003,11 @@ static bool find_isomorphism(const graph* the_graph, const graph* cmp_graph)
             LOG(("Found vertex permuation that could be an ismomorphism"\
                 " between the graphs\n"));
             /*
-            * We don't need to check whether the test graph has additional edges that
-            * are missing in the comparison graph since we already compared the vertex
-            * degree distibutions of both graphs. Thus the sum of all vertex degrees
-            * must be equal for both graphs and the number of edges respectively.
-            */
+             * We don't need to check whether the test graph has additional edges that
+             * are missing in the comparison graph since we already compared the vertex
+             * degree distibutions of both graphs. Thus the sum of all vertex degrees
+             * must be equal for both graphs and the number of edges respectively.
+             */
             for (j = 0; j < nvtcs; j++)
             {
                 map[permu[j].idx] = vtcs_the[j].idx;
@@ -1992,8 +2056,8 @@ static game_state *execute_move(const game_state *state, const char *move)
     long x, y;
 
     /*
-     * Parse the move description. Return NULL if either the description is
-     * incorrect or the move is invalid.
+     * Parse the move description. Return NULL if either the description is incorrect
+     * or the move is invalid.
      */
     if (*move == 'c') contr = true;
     if (!contr && *move != 'd') return NULL;
@@ -2058,26 +2122,32 @@ static game_state *execute_move(const game_state *state, const char *move)
  * Drawing routines.
  */
 
+#define HEADLINE_HEIGHT(tilesize) (1.5F * (float) (tilesize))
+
 static void game_compute_size(const game_params *params, int tilesize,
                               int *x, int *y)
 {
     int g_size = COORDLIMIT(params->n_base) * tilesize;
     *x = NGRIDS * g_size;
-    *y = g_size + HEADLINE_HEIGHT;
+    *y = g_size + HEADLINE_HEIGHT(tilesize);
 }
 
 static void game_set_size(drawing *dr, game_drawstate *ds,
                           const game_params *params, int tilesize)
 {
     ds->tilesize = tilesize;
-    ds->headline_height = HEADLINE_HEIGHT;
+    ds->g_size = COORDLIMIT(params->n_base) * tilesize;
+    ds->g_margin = COORDMARGIN * tilesize;
+    ds->width = NGRIDS * ds->g_size;
+    ds->height = ds->g_size;
+    ds->headline_height = HEADLINE_HEIGHT(tilesize);
 }
 
 static float *game_colours(frontend *fe, int *ncolours)
 {
     float *ret = snewn(3 * NCOLOURS, float);
 
-    frontend_default_colour(fe, &ret[COL_BACKGROUND * 3]);
+    game_mkhighlight(fe, ret, COL_BACKGROUND, -1, COL_SYSBACKGROUND);
 
     /* dark grey */
     ret[(COL_OUTLINE * 3) + 0] = 0.3F;
@@ -2155,7 +2225,11 @@ static game_drawstate *game_new_drawstate(drawing *dr, const game_state *state)
     struct game_drawstate *ds = snew(struct game_drawstate);
 
     ds->tilesize = COORDUNIT;
-    ds->headline_height = HEADLINE_HEIGHT;
+    ds->g_size = COORDLIMIT(state->params.n_base) * COORDUNIT;
+    ds->g_margin = COORDMARGIN * COORDUNIT;
+    ds->width = NGRIDS * ds->g_size;
+    ds->height = ds->g_size;
+    ds->headline_height = HEADLINE_HEIGHT(COORDUNIT);
 
     return ds;
 }
@@ -2199,67 +2273,98 @@ static void game_redraw(drawing *dr, game_drawstate *ds,
      * should start by drawing a big background-colour rectangle
      * covering the whole window.
      */
-    draw_rect(dr, 0, ds->headline_height, ui->width, ui->height, bg_color);
+    draw_rect(dr, 0, ds->headline_height, ds->width, ds->height, bg_color);
 
     /*
-     * Draw the headline area and draw an outline around the area where
-     * the game is drawn. Separate the two grids for the base graph and
-     * minor from each other and separate the headline area from the two
-     * grids by thick lines.
+     * Draw the headline area, separate the two grids for the base
+     * graph and minor from each other and draw an outline around
+     * the area where the game is drawn.
      */
-    draw_rect(dr, 0, 0, ui->width, ds->headline_height, COL_TEXTBACKGROUND);
-    draw_rect_outline(dr, 0, 0, ui->width, ui->height + ds->headline_height, COL_OUTLINE);
-    draw_thick_line(dr, 2.0F, (float) ui->g_size, 0.0F, (float) ui->g_size,
-                    (float) ui->g_size + ds->headline_height, COL_GRIDBORDER);
-    draw_thick_line(dr, 2.0F, 0.0F, (float) ds->headline_height, (float) ui->width,
-                    (float) ds->headline_height, COL_GRIDBORDER);
+    draw_rect(dr, 0, 0, ds->width, ds->headline_height, COL_TEXTBACKGROUND);
+    draw_thick_line(dr, 2.0F, (float) ds->g_size, 0.0F, (float) ds->g_size,
+                    (float) (ds->g_size + ds->headline_height - 1), COL_GRIDBORDER);
+    draw_rect_outline(dr, 0, 0, ds->width, ds->height + ds->headline_height, COL_OUTLINE);
     
     /*
      * Draw texts that make clear which of the two grids belongs to
      * the base graph and which to the minor.
      */
-    draw_text(dr, ui->g_size / 2, ds->headline_height / 2, FONT_FIXED, ds->headline_height / 2,
+    draw_text(dr, ds->g_size / 2, ds->headline_height / 2, FONT_FIXED, ds->headline_height / 2,
                 ALIGN_VCENTRE | ALIGN_HCENTRE, COL_TEXT, "MINOR");
-    draw_text(dr, ui->g_size + (ui->g_size / 2), ds->headline_height / 2, FONT_FIXED,
+    draw_text(dr, ds->g_size + (ds->g_size / 2), ds->headline_height / 2, FONT_FIXED,
                 ds->headline_height / 2, ALIGN_VCENTRE | ALIGN_HCENTRE, COL_TEXT, "ORIGINAL");
-
+    
     /* Draw the minor edges in the intended grid */
     pts = state->minor->points;
-    x_off = state->minor->grid * ui->g_size;
+    x_off = state->minor->grid * ds->g_size;
     for (i = 0; (e = index234(state->minor->edges, i)) != NULL; i++)
     {
+        long xsrc, ysrc, xtgt, ytgt;
         esrc = pts + e->src;
         etgt = pts + e->tgt;
-        draw_line(dr, esrc->x + x_off, esrc->y + ds->headline_height, etgt->x + x_off,
-                    etgt->y + ds->headline_height, COL_EDGE);
+        xsrc = (esrc->x * ds->tilesize / COORDUNIT) + x_off;
+        ysrc = (esrc->y * ds->tilesize / COORDUNIT) + ds->headline_height;
+        xtgt = (etgt->x * ds->tilesize / COORDUNIT) + x_off;
+        ytgt = (etgt->y * ds->tilesize / COORDUNIT) + ds->headline_height;
+        draw_line(dr, xsrc, ysrc, xtgt, ytgt, COL_EDGE);
     }
     /* Draw the minor points in the intended grid */
     for (i = 0; (vx = index234(state->minor->vertices, i)) != NULL; i++)
     {
-        draw_circle(dr, pts[vx->idx].x + x_off, pts[vx->idx].y + ds->headline_height,
-                    POINTRADIUS, COL_MINORPOINT, COL_POINTOUTLINE);
+        long x, y, r;
+        x = (pts[vx->idx].x * ds->tilesize / COORDUNIT) + x_off;
+        y = (pts[vx->idx].y * ds->tilesize / COORDUNIT) + ds->headline_height;
+        r = POINTRADIUS * ds->tilesize / COORDUNIT;
+        draw_circle(dr, x, y, r, COL_MINORPOINT, COL_POINTOUTLINE);
     }
 
     /* Draw the base graph edges in the intended grid */
     pts = state->base->points;
-    x_off = state->base->grid * ui->g_size;
+    x_off = state->base->grid * ds->g_size;
     for (i = 0; (e = index234(state->base->edges, i)) != NULL; i++)
     {
+        long xsrc, ysrc, xtgt, ytgt;
         esrc = pts + e->src;
         etgt = pts + e->tgt;
-        draw_line(dr, ((ui->dragpt == e->src) ? ui->newpt.x : esrc->x) + x_off,
-                    ((ui->dragpt == e->src) ? ui->newpt.y : esrc->y) + ds->headline_height,
-                    ((ui->dragpt == e->tgt) ? ui->newpt.x : etgt->x) + x_off,
-                    ((ui->dragpt == e->tgt) ? ui->newpt.y : etgt->y) + ds->headline_height,
-                    (e->tgt == ui->mergept_rec && e->src == ui->mergept_dom) ?
-                    COL_CONTREDGE : COL_EDGE);
+        if (ui->dragpt == e->src)
+        {
+            xsrc = (ui->newpt.x * ds->tilesize / COORDUNIT) + x_off;
+            ysrc = (ui->newpt.y * ds->tilesize / COORDUNIT) + ds->headline_height;
+        }
+        else
+        {
+            xsrc = (esrc->x * ds->tilesize / COORDUNIT) + x_off;
+            ysrc = (esrc->y * ds->tilesize / COORDUNIT) + ds->headline_height;
+        }
+        if (ui->dragpt == e->tgt)
+        {
+            xtgt = (ui->newpt.x * ds->tilesize / COORDUNIT) + + x_off;
+            ytgt = (ui->newpt.y * ds->tilesize / COORDUNIT) + ds->headline_height;
+        }
+        else
+        {
+            xtgt = (etgt->x * ds->tilesize / COORDUNIT) + x_off;
+            ytgt = (etgt->y * ds->tilesize / COORDUNIT) + ds->headline_height;
+        }
+        draw_line(dr, xsrc, ysrc, xtgt, ytgt, (e->tgt == ui->mergept_rec &&
+                    e->src == ui->mergept_dom) ? COL_CONTREDGE : COL_EDGE);
     }
     /* Draw the base graph points in the intended grid */
     for (i = 0; (vx = index234(state->base->vertices, i)) != NULL; i++)
     {
-        draw_circle(dr, ((vx->idx == ui->dragpt) ? ui->newpt.x : pts[vx->idx].x) + x_off,
-                    ((vx->idx == ui->dragpt) ? ui->newpt.y : pts[vx->idx].y) + ds->headline_height,
-                    POINTRADIUS, (vx->idx == ui->dragpt) ? COL_DRAGPOINT :
+        long x, y, r;
+        if (vx->idx == ui->dragpt)
+        {
+            x = (ui->newpt.x * ds->tilesize / COORDUNIT) + x_off;
+            y = (ui->newpt.y * ds->tilesize / COORDUNIT) + ds->headline_height;
+        }
+        else
+        {
+            x = (pts[vx->idx].x * ds->tilesize / COORDUNIT) + x_off;
+            y = (pts[vx->idx].y * ds->tilesize / COORDUNIT) + ds->headline_height;
+        }
+        r = POINTRADIUS * ds->tilesize / COORDUNIT;
+        draw_circle(dr, x, y, r, (vx->idx == ui->dragpt) ? COL_DRAGPOINT :
 #if DEBUG
                     (vx->idx < state->params.n_min * (state->params.n_base /
                     state->params.n_min)) ? COL_SUBPOINT : COL_BASEPOINT,
@@ -2269,7 +2374,7 @@ static void game_redraw(drawing *dr, game_drawstate *ds,
                     COL_POINTOUTLINE);
     }
 
-    draw_update(dr, 0, 0, ui->width, ui->height + ds->headline_height);
+    draw_update(dr, 0, 0, ds->width, ds->height + ds->headline_height);
 }
 
 static float game_anim_length(const game_state *oldstate,
