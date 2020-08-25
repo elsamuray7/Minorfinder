@@ -1645,7 +1645,7 @@ static char *interpret_move(const game_state *state, game_ui *ui,
 
         /*
          * Get the index of the point with the shortest point heuristic. Do only take points
-         * into account with a heuristic smaller than square(POINT_TRESHOLD).
+         * into account with a heuristic smaller than POINT_TRESHOLD.
          */
         pts = state->base->points;
         for (i = 0; (vx = index234(state->base->vertices, i)) != NULL; i++)
@@ -1661,7 +1661,7 @@ static char *interpret_move(const game_state *state, game_ui *ui,
 
         /*
          * Get the index of the edge with the shortest edge heuristic. Do only take edges
-         * into account with a heuristic smaller than EDGE_HEURISTIC.
+         * into account with a heuristic smaller than EDGE_TRESHOLD.
          */
         for (i = 0; (e = index234(state->base->edges, i)) != NULL; i++)
         {
@@ -1675,9 +1675,9 @@ static char *interpret_move(const game_state *state, game_ui *ui,
         }
 
         /*
-        * Check whether there is any point with a point heuristic smaller than the
-        * treshold. If yes => game_ui requires update.
-        */
+         * Check whether there is any point with a point heuristic smaller than the
+         * treshold. If yes => game_ui requires update.
+         */
         if (best_ptheur < POINT_TRESHOLD)
         {
             ui->newpt.x = realx;
@@ -1724,8 +1724,8 @@ static char *interpret_move(const game_state *state, game_ui *ui,
          */
         if (ui->dragpt != -1)
         {
-            if (ui->newpt.x < 0 || ui->newpt.x > ds->g_size * COORDUNIT / ds->tilesize ||
-                ui->newpt.y < 0 || ui->newpt.y > ds->g_size * COORDUNIT / ds->tilesize)
+            if (ui->newpt.x < 0 || ui->newpt.x > ds->g_size * COORDUNIT / ds->tilesize
+                || ui->newpt.y < 0 || ui->newpt.y > ds->g_size * COORDUNIT / ds->tilesize)
             {
                 ui->dragpt = -1;
                 return UI_UPDATE;
@@ -1745,10 +1745,8 @@ static char *interpret_move(const game_state *state, game_ui *ui,
          */
         else if (ui->mergept_rec != -1 && ui->mergept_dom != -1)
         {
-            if (x < state->base->grid * ds->g_size
-                || x > (state->base->grid * ds->g_size) + ds->g_size
-                || y < ds->headline_height
-                || y > ds->headline_height + ds->g_size)
+            if (x < state->base->grid * ds->g_size || x > (state->base->grid * ds->g_size) + ds->g_size
+                || y < ds->headline_height || y > ds->headline_height + ds->g_size)
             {
                 ui->mergept_rec = -1;
                 ui->mergept_dom = -1;
