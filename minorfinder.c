@@ -1236,10 +1236,10 @@ static const char *validate_desc(const game_params *params, const char *desc)
     const char* _desc = desc; /* pointer copy */
     const char* err;
     long grid_size = COORDLIMIT(params->n_base) * COORDUNIT;
-    long grid_marginrgin = COORDMARGIN * COORDUNIT;
-    if ((err = validate_graph(&_desc, params->n_min, grid_size - grid_marginrgin, grid_marginrgin)) != NULL)
+    long grid_margin = COORDMARGIN * COORDUNIT;
+    if ((err = validate_graph(&_desc, params->n_min, grid_size - grid_margin, grid_margin)) != NULL)
         return err;
-    else if ((err = validate_graph(&_desc, params->n_base, grid_size - grid_marginrgin, grid_marginrgin)) != NULL)
+    else if ((err = validate_graph(&_desc, params->n_base, grid_size - grid_margin, grid_margin)) != NULL)
         return err;
     else
         return NULL;
