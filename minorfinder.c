@@ -1880,6 +1880,32 @@ static void free_node(node* n, bool isroot)
 }
 
 /*
+ * A key value mapping in a map
+ */
+typedef struct mapping {
+    int key;
+    int value;
+} mapping;
+
+/*
+ * Compare a key value mapping by its key
+ */
+static int mappingcmpC(const void* av, const void* bv)
+{
+    const mapping* a = (mapping*) av;
+    const mapping* b = (mapping*) bv;
+
+    if (a->key < b->key) return -1;
+    else if (a->key > b->key) return 1;
+    else return 0;
+}
+
+static int mappingcmp(void* av, void* bv)
+{
+    return mappingcmpC(av, bv);
+}
+
+/*
  * Check whether there exists an isomorphism between a test graph and a comparison
  * graph. The algorithm builds on the idea that vertices with different degree can't
  * be a vertex pair of a permutation that is an isomorphism between two graphs.
@@ -1996,7 +2022,8 @@ static bool find_isomorphism(const graph* the_graph, const graph* cmp_graph)
         LOG(("Fetched node at position %d from the lifo queue\n", tmp));
         if((permu = expand_node(n)))
         {
-            int map[80];
+            mapping* mappings;
+            tree234* map = newtree234(mappingcmp);
             found = true;
             LOG(("Found vertex permuation that could be an ismomorphism"\
                 " between the graphs\n"));
@@ -2006,22 +2033,33 @@ static bool find_isomorphism(const graph* the_graph, const graph* cmp_graph)
              * degree distibutions of both graphs. Thus the sum of all vertex degrees
              * must be equal for both graphs and the number of edges respectively.
              */
+            mappings = snewn(nvtcs, mapping);
             for (j = 0; j < nvtcs; j++)
             {
-                map[permu[j].idx] = vtcs_the[j].idx;
+                mappings[j].key = permu[j].idx;
+                mappings[j].value = vtcs_the[j].idx;
+                add234(map, mappings + j);
             }
             sfree(permu);
             for (j = 0; (e = index234(cmp_graph->edges, j)) != NULL; j++)
             {
-                if (!isedge(the_graph->edges, map[e->src], map[e->tgt]))
+                mapping msrc, mtgt;
+                msrc.key = e->src;
+                mtgt.key = e->tgt;
+                msrc.value = mtgt.value = -1;
+                msrc.value = ((mapping*) find234(map, &msrc, mappingcmp))->value;
+                mtgt.value = ((mapping*) find234(map, &mtgt, mappingcmp))->value;
+                if (!isedge(the_graph->edges, msrc.value, mtgt.value))
                 {
                     found = false;
                     LOG(("Permutation is no isomorphism between the graphs,\n"\
-                        " missing edge %d-%d in the test graph\n", map[e->src],
-                        map[e->tgt]));
+                        " missing edge %d-%d in the test graph\n", msrc.value,
+                        mtgt.value));
                     break;
                 }
             }
+            sfree(mappings);
+            freetree234(map);
             if (found)
             {
                 LOG(("Permutation is an isomorphism between the graphs\n"));
