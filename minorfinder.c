@@ -2231,17 +2231,17 @@ static game_state *execute_move(const game_state *state, const char *move)
     switch (current_move)
     {
         case MOVE_DRAGPOINT:
-            if (!(*move || isdigit((uint8) *move))) return NULL;
+            if (!(*move && isdigit((uint8) *move))) return NULL;
             idx = atoi(move);
             while(*move && isdigit((uint8) *move)) move++;
             if (*move != '-') return NULL;
             move++;
-            if (!(*move || isdigit((uint8) *move))) return NULL;
+            if (!(*move && isdigit((uint8) *move))) return NULL;
             x = atol(move);
             while(*move && isdigit((uint8) *move)) move++;
             if (*move != '-') return NULL;
             move++;
-            if (!(*move || isdigit((uint8) *move))) return NULL;
+            if (!(*move && isdigit((uint8) *move))) return NULL;
             y = atol(move);
 
             grid_size = COORDLIMIT(state->params.n_base) * COORDUNIT;
@@ -2274,11 +2274,11 @@ static game_state *execute_move(const game_state *state, const char *move)
             break;
         case MOVE_DELPOINT:
             v.deg = 0;
-            if (!(*move || isdigit((uint8) *move))) return NULL;
+            if (!(*move && isdigit((uint8) *move))) return NULL;
             v.idx = atoi(move);
             while(*move && isdigit((uint8) *move)) move++;
 
-            if (v.idx < 0 || v.idx >= state->params.n_base)
+            if (v.idx < 0 && v.idx >= state->params.n_base)
                 return NULL;
 
             ret = dup_game(state);
