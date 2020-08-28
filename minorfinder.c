@@ -579,31 +579,20 @@ static int vertcmp(void *av, void *bv)
  */
 
 #define POINTRADIUS 6
-#define POINT_CROSSCHECK_ACCURACY 50
+#define CROSSPOINT_THRESHOLD POINTRADIUS
+
+#define square(x) ((x) * (x))
 
 /*
  * Check whether the edge between s and t crosses the point p
  */
 static bool crosspoint(point s, point t, point p)
 {
-    int i;
+    long dist_st = squarert(square(t.x - s.x) + square(t.y - s.y));
+    long dist_sp = squarert(square(p.x - s.x) + square(p.y - s.y));
+    long dist_pt = squarert(square(t.x - p.x) + square(t.y - p.y));
 
-    for (i = 0; i < POINT_CROSSCHECK_ACCURACY; i++)
-    {
-        double a = (double) i * 2.0 * PI / (double) (2 * POINT_CROSSCHECK_ACCURACY);
-        point pa;
-        point pb;
-        pa.x = p.x + ((POINTRADIUS + 2) * sin(a));
-        pa.y = p.y + ((POINTRADIUS + 2) * cos(a));
-        pa.d = 1;
-        pb.x = p.x - ((POINTRADIUS + 2) * sin(a));
-        pb.y = p.y - ((POINTRADIUS + 2) * cos(a));
-        pb.d = 1;
-        if (cross(s, t, pa, pb))
-            return true;
-    }
-
-    return false;
+    return dist_sp + dist_pt - dist_st < CROSSPOINT_THRESHOLD;
 }
 
 /*
@@ -799,9 +788,9 @@ static void addedges(tree234* edges, vertex* vertices, point* points, const int 
 #define COORDUNIT 24
 
 #define MINORRADIUS(n) ((n) / 3)
-#define SUBGRAPH_POINT_ENTROPY 2
-
-#define square(x) ((x) * (x))
+#define SUBGRAPH_POINTENTROPY 2
+#define SUBGRAPHDISTANCE (2 * POINTRADIUS)
+#define OVERLAYPOINT_TRESHOLD square(4 * POINTRADIUS)
 
 static char *new_game_desc(const game_params *params, random_state *rs,
 			   char **aux, bool interactive)
@@ -878,9 +867,9 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     for (i = 0; i < n_min; i++)
     {
         pt = pts_min + i;
-        radii[i] = (min(min(min(pt->x - tmp, pt->y - tmp), min(tmp2 - pt->x, tmp2 - pt->y)),
-                        squarert(square(pts_min[1].x - pts_min[0].x) + square(pts_min[1].y
-                        - pts_min[0].y))) / 2) - POINTRADIUS;
+        radii[i] = min(min(min(pt->x - tmp, pt->y - tmp), min(tmp2 - pt->x, tmp2 - pt->y)),
+                        (squarert(square(pts_min[1].x - pts_min[0].x) + square(pts_min[1].y
+                        - pts_min[0].y)) / 2)) - (SUBGRAPHDISTANCE / 2);
         LOG(("Assigned subgraph radius %ld to subgraph %ld\n", radii[i], i));
     }
 
@@ -888,7 +877,7 @@ static char *new_game_desc(const game_params *params, random_state *rs,
      * Assign coordinates to the subgraphs. The coordinates must lie in the previously
      * calculated subgraph areas.
      */
-    tmp = SUBGRAPH_POINT_ENTROPY * n_sub;
+    tmp = SUBGRAPH_POINTENTROPY * n_sub;
     angles = snewn(tmp, double);
     for (i = 0; i < tmp; i++)
     {
@@ -931,58 +920,66 @@ static char *new_game_desc(const game_params *params, random_state *rs,
      * For every minor edge add an edge between random points of the subgraphs that
      * correspond to the adjacent minor points.
      */
+    tmp = count234(edges_min_234);
     for (i = 0; (e = index234(edges_min_234, i)) != NULL; i++)
     {
-#if DEBUG
-        bool added;
-#endif
-        edge __e;
-        __e.src = __e.tgt = -1;
+        bool added = false;
+        edge beste;
+        edge* _e;
+        tree234* vtcs_src = newtree234(vertcmp);
+        tree234* vtcs_tgt = newtree234(vertcmp);
+        beste.src = beste.tgt = -1;
         for (j = e->src * n_sub; j < (e->src + 1) * n_sub; j++)
         {
-            __e.src = j;
-            for (k = e->tgt * n_sub; k < (e->tgt + 1) * n_sub; k++)
+            add234(vtcs_src, vtcs_base + j);
+        }
+        for (j = e->tgt * n_sub; j < (e->tgt + 1) * n_sub; j++)
+        {
+            add234(vtcs_tgt, vtcs_base + j);
+        }
+        for (j = 0; j < n_sub; j++)
+        {
+            beste.src = ((vertex*) index234(vtcs_src, j))->idx;
+            for (k = 0; k < n_sub; k++)
             {
-                edge* ebase;
-                __e.tgt = k;
+                beste.tgt = ((vertex*) index234(vtcs_tgt, k))->idx;
                 /* check for crossing edges */
-                for (l = 0; (ebase = index234(edges_base_234, l)) != NULL; l++)
+                for (l = 0; (_e = index234(edges_base_234, l)) != NULL; l++)
                 {
-                    if (ebase->src == __e.src || ebase->tgt == __e.src
-                        || ebase->src == __e.tgt || ebase->tgt == __e.tgt)
+                    if (_e->src == beste.src || _e->tgt == beste.src
+                        || _e->src == beste.tgt || _e->tgt == beste.tgt)
                         continue;
-                    else if (cross(pts_base[__e.src], pts_base[__e.tgt],
-                                    pts_base[ebase->src], pts_base[ebase->tgt]))
-                        goto next_tgt; /* the edge crosses another edge => next tgt */
+                    else if (cross(pts_base[beste.src], pts_base[beste.tgt],
+                                    pts_base[_e->src], pts_base[_e->tgt]))
+                        goto next_tgt; /* this edge crosses another edge => next target */
                 }
                 /* check for crossing points */
                 for (l = 0; l < n_min * n_sub; l++)
                 {
-                    if (l == __e.src || l == __e.tgt)
+                    if (l == beste.src || l == beste.tgt)
                         continue;
-                    else if (crosspoint(pts_base[__e.src], pts_base[__e.tgt], pts_base[l]))
-                        goto next_tgt; /* this edge crosses a point => next tgt */
+                    else if (crosspoint(pts_base[beste.src], pts_base[beste.tgt], pts_base[l]))
+                        goto next_tgt; /* this edge crosses a point => next target */
                 }
-                addedge(edges_base_234, __e.src, __e.tgt);
-#if DEBUG
+                addedge(edges_base_234, beste.src, beste.tgt);
                 added = true;
-#endif
-                LOG(("Added edge between subgraphs %d and %d (base graph vertices %d and %d)\n",
-                    e->src, e->tgt, __e.src, __e.tgt));
-                vtcs_base[__e.src].deg++;
-                vtcs_base[__e.tgt].deg++;
-                LOG(("Updated degrees of vertices %d to %d and %d to %d\n", vtcs_base[__e.src].idx,
-                    vtcs_base[__e.src].deg, vtcs_base[__e.tgt].idx, vtcs_base[__e.tgt].deg));
                 goto next_edge;
                 next_tgt:;
             }
         }
         next_edge:
-#if DEBUG
-        assert(added);
-#else
-        ;
-#endif
+        if (!added)
+        {
+            beste.src = random_upto(rs, n_sub) + (e->src * n_sub);
+            beste.tgt = random_upto(rs, n_sub) + (e->tgt * n_sub);
+            addedge(edges_base_234, beste.src, beste.tgt);
+        }
+        LOG(("Added edge between subgraphs %d and %d (base graph vertices %d and %d)\n",
+            e->src, e->tgt, beste.src, beste.tgt));
+        vtcs_base[beste.src].deg++;
+        vtcs_base[beste.tgt].deg++;
+        LOG(("Updated degrees of vertices %d to %d and %d to %d\n", vtcs_base[beste.src].idx,
+            vtcs_base[beste.src].deg, vtcs_base[beste.tgt].idx, vtcs_base[beste.tgt].deg));
     }
 
     /*
@@ -1007,17 +1004,17 @@ static char *new_game_desc(const game_params *params, random_state *rs,
         p.d = 1;
         p.x = coords_x[i];
         p.y = coords_y[i];
-        /* check for an overlaying with an edge */
+        /* check for a crossing with an edge */
         for (k = 0; (e = index234(edges_base_234, k)) != NULL; k++)
         {
             if (crosspoint(pts_base[e->src], pts_base[e->tgt], p))
-                goto next_coords; /* the point overlays an edge => next coords */
+                goto next_coords; /* an edge crosses the point => next coords */
         }
         /* check for an overlaying with a point */
         for (k = 0; k < tmp2 + tmp3; k++)
         {
             pt = pts_base + k;
-            if (square(pt->x - p.x) + square(pt->y - p.y) < square((2 * POINTRADIUS) + 2))
+            if (square(pt->x - p.x) + square(pt->y - p.y) < OVERLAYPOINT_TRESHOLD)
                 goto next_coords; /* the point overlays another point => next coords */
         }
         pt = pts_base + tmp2 + tmp3++;
@@ -2034,7 +2031,7 @@ static int mappingcmp(void* av, void* bv)
  * graph. The algorithm builds on the idea that vertices with different degree can't
  * be a vertex pair of a permutation that is an isomorphism between two graphs.
  */
-static bool find_isomorphism(const graph* the_graph, const graph* cmp_graph)
+static bool treesearch_isomorphism_test(const graph* the_graph, const graph* cmp_graph)
 {
     bool found;
     int i, j;
@@ -2062,19 +2059,24 @@ static bool find_isomorphism(const graph* the_graph, const graph* cmp_graph)
     for (i = 0; (vx = index234(the_graph->vertices, i)) != NULL; i++)
     {
         vtcs_the[i] = *vx;
+#if DEBUG
+        if (i > 0) assert(vtcs_the[i-1].deg <= vtcs_the[i].deg);
+#endif
     }
     vtcs_cmp = snewn(nvtcs, vertex);
     for (i = 0; (vx = index234(cmp_graph->vertices, i)) != NULL; i++)
     {
         vtcs_cmp[i] = *vx;
+#if DEBUG
+        if (i > 0) assert(vtcs_cmp[i-1].deg <= vtcs_cmp[i].deg);
+#endif
     }
-    qsort(vtcs_the, nvtcs, sizeof(vertex), vertcmpC);
-    qsort(vtcs_cmp, nvtcs, sizeof(vertex), vertcmpC);
+
     tmp = 1;
     for (i = 0; i < nvtcs; i++)
     {
-        LOG(("Vertex %d has indices %d and %d and degrees %d and %d\n", i,
-            vtcs_the[i].idx, vtcs_cmp[i].idx, vtcs_the[i].deg, vtcs_cmp[i].deg));
+        LOG(("Vertices at position %d have indices %d and %d and degrees %d and %d\n",
+            i, vtcs_the[i].idx, vtcs_cmp[i].idx, vtcs_the[i].deg, vtcs_cmp[i].deg));
         if (vtcs_the[i].deg != vtcs_cmp[i].deg)
         {
             LOG(("The graphs have different vertex degree distributions\n"));
@@ -2307,7 +2309,7 @@ static game_state *execute_move(const game_state *state, const char *move)
     }
 
     if (!(current_move == MOVE_DRAGPOINT || state->solved))
-        ret->solved = find_isomorphism(ret->minor, ret->base);
+        ret->solved = treesearch_isomorphism_test(ret->minor, ret->base);
 
     return ret;
 }
