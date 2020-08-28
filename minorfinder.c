@@ -605,7 +605,10 @@ static void addedges(tree234* edges, vertex* vertices, point* points, const int 
                     const int n_pts, const int __max_deg, random_state* rs)
 {
     bool* contains;
-    int i, j;
+    int i;
+#if DEBUG
+    int j;
+#endif
     int off_src_vtcs;
     int n_src_vtcs;
     int off_tgt_vtcs;
@@ -788,8 +791,8 @@ static void addedges(tree234* edges, vertex* vertices, point* points, const int 
 #define COORDUNIT 24
 
 #define MINORRADIUS(n) ((n) / 3)
+#define SUBGRAPH_DISTANCE (4 * POINTRADIUS)
 #define SUBGRAPH_POINTENTROPY 2
-#define SUBGRAPHDISTANCE (2 * POINTRADIUS)
 #define OVERLAYPOINT_TRESHOLD square(4 * POINTRADIUS)
 
 static char *new_game_desc(const game_params *params, random_state *rs,
@@ -869,7 +872,7 @@ static char *new_game_desc(const game_params *params, random_state *rs,
         pt = pts_min + i;
         radii[i] = min(min(min(pt->x - tmp, pt->y - tmp), min(tmp2 - pt->x, tmp2 - pt->y)),
                         (squarert(square(pts_min[1].x - pts_min[0].x) + square(pts_min[1].y
-                        - pts_min[0].y)) / 2)) - (SUBGRAPHDISTANCE / 2);
+                        - pts_min[0].y)) / 2)) - (SUBGRAPH_DISTANCE / 2);
         LOG(("Assigned subgraph radius %ld to subgraph %ld\n", radii[i], i));
     }
 
@@ -970,8 +973,22 @@ static char *new_game_desc(const game_params *params, random_state *rs,
         next_edge:
         if (!added)
         {
-            beste.src = random_upto(rs, n_sub) + (e->src * n_sub);
-            beste.tgt = random_upto(rs, n_sub) + (e->tgt * n_sub);
+            int sqdist;
+            int best_sqdist = square(coord_lim * COORDUNIT);
+            for (j = e->src * n_sub; j < (e->src + 1) * n_sub; j++)
+            {
+                for (k = e->tgt * n_sub; k < (e->tgt + 1) * n_sub; k++)
+                {
+                    sqdist = square(pts_base[k].x - pts_base[j].x)
+                            + square(pts_base[k].y - pts_base[j].y);
+                    if (sqdist < best_sqdist)
+                    {
+                        best_sqdist = sqdist;
+                        beste.src = j;
+                        beste.tgt = k;
+                    }
+                }
+            }
             addedge(edges_base_234, beste.src, beste.tgt);
         }
         LOG(("Added edge between subgraphs %d and %d (base graph vertices %d and %d)\n",
