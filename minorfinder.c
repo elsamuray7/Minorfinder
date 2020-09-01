@@ -792,7 +792,7 @@ static void addedges(tree234* edges, vertex* vertices, point* points, const int 
 
 #define MINORRADIUS(n) ((n) / 3)
 #define SUBGRAPH_DISTANCE (4 * POINTRADIUS)
-#define SUBGRAPH_POINTENTROPY 2
+#define SUBGRAPH_POINTENTROPY 4
 #define OVERLAYPOINT_TRESHOLD square(4 * POINTRADIUS)
 
 static char *new_game_desc(const game_params *params, random_state *rs,
@@ -1410,10 +1410,7 @@ static graph* dup_graph(const graph* gr, int n)
     {
         add234(ret->vertices, ret->vtcs + vx->idx);
     }
-    /*
-     * I don't exactly know why but the game crashes when we don't copy the whole
-     * 234-tree including its elements at this point.
-     */
+
     ret->edges = copytree234(gr->edges, edgecpy, NULL);
 
     return ret;
@@ -1517,6 +1514,8 @@ static void contract_edge(graph* graph, int dom, int rec)
     graph->points[dom].x += (graph->points[rec].x - graph->points[dom].x) / 2;
     graph->points[dom].y += (graph->points[rec].y - graph->points[dom].y) / 2;
     del234(graph->vertices, graph->vtcs + rec);
+    for (i = 0; (e = delpos234(graph->edges, 0)) != NULL; i++) sfree(e);
+    freetree234(graph->edges);
     graph->edges = edgescpy;
 }
 
@@ -1535,372 +1534,6 @@ static void delete_edge(graph* graph, edge e)
     graph->vtcs[e.tgt].deg--;
     add234(graph->vertices, graph->vtcs + e.src);
     add234(graph->vertices, graph->vtcs + e.tgt);
-}
-
-static char *solve_game(const game_state *state, const game_state *currstate,
-                        const char *aux, const char **error)
-{
-    return NULL;
-}
-
-static bool game_can_format_as_text_now(const game_params *params)
-{
-    return true;
-}
-
-static char *game_text_format(const game_state *state)
-{
-    return NULL;
-}
-
-/*
- * A move that can be performed by a player
- */
-enum move {
-    MOVE_IDLE = 0x0,
-    MOVE_DRAGPOINT = 0x1,
-    MOVE_CONTREDGE = 0x2,
-    MOVE_DELPOINT = 0x4,
-    MOVE_DELEDGE = 0x8
-};
-
-struct game_ui {
-
-    /* new position of the drag point */
-    point newpt;
-    /* index of the drag point */
-    int dragpt;
-
-    /* index of the point to delete */
-    int delpt;
-
-    /* index of the resulting point of the merge - the dominant point */
-    int mergept_dom;
-    /* index of the recessive point */
-    int mergept_rec;
-
-    /* indices of the vertices that are incident to the edge that should be deleted */
-    int deledge_src, deledge_tgt;
-
-    /* the currently ongoing move */
-    enum move current_move;
-
-};
-
-static game_ui *new_ui(const game_state *state)
-{
-    game_ui* ret = snew(game_ui);
-    ret->newpt.d = 1;
-    ret->dragpt = -1;
-    ret->delpt = -1;
-    ret->mergept_dom = -1;
-    ret->mergept_rec = -1;
-    ret->deledge_src = -1;
-    ret->deledge_tgt = -1;
-    ret->current_move = MOVE_IDLE;
-
-    return ret;
-}
-
-static void free_ui(game_ui *ui)
-{
-    sfree(ui);
-}
-
-static char *encode_ui(const game_ui *ui)
-{
-    return NULL;
-}
-
-static void decode_ui(game_ui *ui, const char *encoding)
-{
-}
-
-static void game_changed_state(game_ui *ui, const game_state *oldstate,
-                               const game_state *newstate)
-{
-    switch (ui->current_move)
-    {
-        case MOVE_DRAGPOINT:
-            ui->dragpt = -1;
-            break;
-        case MOVE_CONTREDGE:
-            ui->mergept_dom = -1;
-            ui->mergept_rec = -1;
-            break;
-        case MOVE_DELPOINT:
-            ui->delpt = -1;
-            break;
-        case MOVE_DELEDGE:
-            ui->deledge_src = -1;
-            ui->deledge_tgt = -1;
-            break;
-        case MOVE_IDLE:
-        default:;
-    }
-    ui->current_move = MOVE_IDLE;
-}
-
-struct game_drawstate {
-
-    int tilesize;
-
-    long grid_size;
-    long grid_margin;
-
-    long headline_height;
-
-    /* game window size */
-    long width, height;
-
-};
-
-#define POINT_TRESHOLD square(POINTRADIUS + 2)
-#define EDGE_TRESHOLD 2
-
-/* heuristic to determine whether a point has been clicked */
-#define point_heuristic(px, py, cx, cy) (square((px) - (cx)) + square((py) - (cy)))
-
-/*
- * Heuristic to determine whether an edge has been clicked
- */
-static double edge_heuristic(long esx, long esy, long etx, long ety,
-                            long cx, long cy)
-{
-    long dist_st = squarert(square(etx - esx) + square(ety - esy));
-    long dist_sc = squarert(square(cx - esx) + square(cy - esy));
-    long dist_ct = squarert(square(etx - cx) + square(ety - cy));
-    return dist_sc + dist_ct - dist_st;
-}
-
-static char *interpret_move(const game_state *state, game_ui *ui,
-                            const game_drawstate *ds,
-                            int x, int y, int button)
-{
-    /*
-     * Since one can only perform moves on the base graph which is placed in GRID_RIGHT
-     * and the point coordinates of a graph are given in relation to its grid one needs
-     * to subtract the grid size from the x-coordinate of the mouse event. Make sure the
-     * coordinates are correct, even if the player resizes the window.
-     */
-    long realx = (x - (state->base->grid * ds->grid_size)) * COORDUNIT / ds->tilesize;
-    long realy = (y - ds->headline_height) * COORDUNIT / ds->tilesize;
-
-    if (IS_MOUSE_DOWN(button))
-    {
-        int i;
-        int bestpt_idx = -1;
-        long ptheur;
-        long bestpt_heur = POINT_TRESHOLD;
-        double eheur;
-        double beste_heur = EDGE_TRESHOLD;
-        point* pt;
-        point* pts;
-        vertex* vx;
-        edge beste;
-        edge* e;
-        beste.src = beste.tgt = -1;
-
-        /*
-         * Discard the move if the button that has been pressed is neither LEFT_BUTTON nor
-         * RIGHT_BUTTON.
-         */
-        if (!(button == LEFT_BUTTON || button == RIGHT_BUTTON))
-            return NULL;
-
-        /*
-         * Get the index of the point with the shortest point heuristic. Do only take points
-         * into account with a heuristic smaller than POINT_TRESHOLD.
-         */
-        pts = state->base->points;
-        for (i = 0; (vx = index234(state->base->vertices, i)) != NULL; i++)
-        {
-            pt = pts + vx->idx;
-            ptheur = point_heuristic(pt->x, pt->y, realx, realy);
-            if (ptheur < bestpt_heur)
-            {
-                bestpt_heur = ptheur;
-                bestpt_idx = vx->idx;
-            }
-        }
-        /*
-         * Check whether there is any point with a point heuristic smaller than the
-         * treshold. If yes => game_ui requires update.
-         */
-        if (bestpt_heur < POINT_TRESHOLD)
-        {
-            if (button == LEFT_BUTTON)
-            {
-                ui->current_move = MOVE_DRAGPOINT;
-                ui->dragpt = bestpt_idx;
-                ui->newpt.x = realx;
-                ui->newpt.y = realy;
-                LOG(("Updated position of point %d to x:%ld, x:%ld\n", ui->dragpt, ui->newpt.x,
-                    ui->newpt.y));
-                return UI_UPDATE;
-            }
-            else if (state->base->vtcs[bestpt_idx].deg == 0)
-            {
-                ui->current_move = MOVE_DELPOINT;
-                ui->delpt = bestpt_idx;
-                LOG(("Selected point %d to delete\n", ui->delpt));
-                return UI_UPDATE;
-            }
-        }
-        else
-        {
-            /*
-            * Get the index of the edge with the shortest edge heuristic. Do only take edges
-            * into account with a heuristic smaller than EDGE_TRESHOLD.
-            */
-            for (i = 0; (e = index234(state->base->edges, i)) != NULL; i++)
-            {
-                eheur = edge_heuristic(pts[e->src].x, pts[e->src].y, pts[e->tgt].x,
-                                        pts[e->tgt].y, realx, realy);
-                if (eheur < beste_heur)
-                {
-                    beste_heur = eheur;
-                    beste = *e;
-                }
-            }
-            /*
-             * Check whether there is at least one edge with an edge heuristic smaller
-             * than the treshold. If yes => game_ui requires update.
-             */
-            if (beste_heur < EDGE_TRESHOLD)
-            {
-                if (button == LEFT_BUTTON)
-                {
-                    ui->current_move = MOVE_CONTREDGE;
-                    ui->mergept_dom = beste.src;
-                    ui->mergept_rec = beste.tgt;
-                    LOG(("Selected edge %d-%d to contract\n", ui->mergept_dom, ui->mergept_rec));
-                    return UI_UPDATE;
-                }
-                else
-                {
-                    ui->current_move = MOVE_DELEDGE;
-                    ui->deledge_src = beste.src;
-                    ui->deledge_tgt = beste.tgt;
-                    LOG(("Selected edge %d-%d to delete\n", ui->deledge_src, ui->deledge_tgt));
-                    return UI_UPDATE;
-                }
-            }
-        }
-    }
-    else if (IS_MOUSE_DRAG(button))
-    {
-        /* Check for an ongoing drag. If yes => game_ui requires update. */
-        if (ui->current_move == MOVE_DRAGPOINT)
-        {
-            ui->newpt.x = realx;
-            ui->newpt.y = realy;
-            LOG(("Updated position of drag point to x:%ld, y:%ld\n", ui->newpt.x, ui->newpt.y));
-            return UI_UPDATE;
-        }
-    }
-    else if (IS_MOUSE_RELEASE(button))
-    {
-        switch (ui->current_move)
-        {
-            /*
-             * Check for an ongoing drag. If yes, check whether the player wants to discard
-             * the drag. If no => make move, else => discard and update game_ui.
-             */
-            case MOVE_DRAGPOINT:
-                if (ui->newpt.x < 0 || ui->newpt.x > ds->grid_size * COORDUNIT / ds->tilesize
-                    || ui->newpt.y < 0 || ui->newpt.y > ds->grid_size * COORDUNIT / ds->tilesize)
-                {
-                    ui->current_move = MOVE_IDLE;
-                    ui->dragpt = -1;
-                    LOG(("Unselected drag point\n"));
-                    return UI_UPDATE;
-                }
-                else
-                {
-                    char buf[80];
-                    sprintf(buf, "%d:%d-%ld-%ld", ui->current_move, ui->dragpt, ui->newpt.x,
-                            ui->newpt.y);
-                    LOG(("Dragging point %d to position x:%ld, y:%ld\n", ui->dragpt, ui->newpt.x,
-                        ui->newpt.y));
-                    return dupstr(buf);
-                }
-            /*
-             * Check for an ongoing contraction. If yes, check whether the player wants
-             * to discard the contraction. If no => make move, else => discard and update
-             * game_ui.
-             */
-            case MOVE_CONTREDGE:
-                if (x < state->base->grid * ds->grid_size
-                    || x > (state->base->grid * ds->grid_size) + ds->grid_size
-                    || y < ds->headline_height || y > ds->height)
-                {
-                    ui->current_move = MOVE_IDLE;
-                    ui->mergept_dom = -1;
-                    ui->mergept_rec = -1;
-                    LOG(("Unselected edge to contract\n"));
-                    return UI_UPDATE;
-                }
-                else
-                {
-                    char buf[80];
-                    sprintf(buf, "%d:%d-%d", ui->current_move, ui->mergept_dom, ui->mergept_rec);
-                    LOG(("Contracting edge between vertices %d and %d\n", ui->mergept_dom,
-                        ui->mergept_rec));
-                    return dupstr(buf);
-                }
-            /*
-             * Check for an ongoing point deletion. If yes, check whether the player wants
-             * to discard the deletion. If no => make move, else => discard and update
-             * game_ui.
-             */
-            case MOVE_DELPOINT:
-                if (x < state->base->grid * ds->grid_size
-                    || x > (state->base->grid * ds->grid_size) + ds->grid_size
-                    || y < ds->headline_height || y > ds->height)
-                {
-                    ui->current_move = MOVE_IDLE;
-                    ui->delpt = -1;
-                    LOG(("Unselected point to delete\n"));
-                    return UI_UPDATE;
-                }
-                else
-                {
-                    char buf[80];
-                    sprintf(buf, "%d:%d", ui->current_move, ui->delpt);
-                    LOG(("Deleting point %d\n", ui->delpt));
-                    return dupstr(buf);
-                }
-            /*
-             * Check for an ongoing edge deletion. If yes, check whether the player wants
-             * to discard the deletion. If no => make move, else => discard and update
-             * game_ui.
-             */
-            case MOVE_DELEDGE:
-                if (x < state->base->grid * ds->grid_size
-                    || x > (state->base->grid * ds->grid_size) + ds->grid_size
-                    || y < ds->headline_height || y > ds->height)
-                {
-                    ui->current_move = MOVE_IDLE;
-                    ui->deledge_src = -1;
-                    ui->deledge_tgt = -1;
-                    LOG(("Unselected edge to delete\n"));
-                    return UI_UPDATE;
-                }
-                else
-                {
-                    char buf[80];
-                    sprintf(buf, "%d:%d-%d", ui->current_move, ui->deledge_src, ui->deledge_tgt);
-                    LOG(("Deleting edge between vertices %d and %d\n", ui->deledge_src,
-                        ui->deledge_tgt));
-                    return dupstr(buf);
-                }
-            case MOVE_IDLE:
-            default:;
-        }
-    }
-
-    return NULL;
 }
 
 /*
@@ -2227,106 +1860,649 @@ static bool treesearch_isomorphism_test(const graph* the_graph, const graph* cmp
     return found;
 }
 
+/*
+ * A move that can be performed by a player
+ */
+enum move {
+    MOVE_IDLE = 0x0,
+    MOVE_DRAGPOINT = 0x1,
+    MOVE_CONTREDGE = 0x2,
+    MOVE_DELPOINT = 0x4,
+    MOVE_DELEDGE = 0x8
+};
+
+static char *solve_game(const game_state *state, const game_state *currstate,
+                        const char *aux, const char **error)
+{
+    char buf[80];
+    char* ret;
+
+    int retsize = 256;
+    int retlen = 0;
+    int retoff;
+
+    int n_base = currstate->params.n_base;
+    int n_min = currstate->params.n_min;
+    int n_1sub = n_base / n_min;
+    int n_nsub = n_min * n_1sub;
+
+    int i;
+
+    vertex* vx;
+    edge* e;
+
+    game_state* solved;
+
+    /*
+     * Delete all edges that are incident to the remaining points and then delete
+     * the remaining points themselves.
+     */
+    ret = snewn(retsize, char);
+
+    if (currstate->cheated)
+    {
+        retoff = sprintf(buf, "%d:;", MOVE_IDLE);
+        if (retlen + retoff >= retsize)
+        {
+            retsize = retlen + retoff + 256;
+            ret = sresize(ret, retsize, char);
+        }
+        strcpy(ret + retlen, buf);
+        retlen += retoff;
+
+        LOG(("Idled\n"));
+
+        return ret;
+    }
+
+    ret[retlen++] = 'S';
+
+    solved = dup_game(currstate);
+    for (i = 0; (e = index234(currstate->base->edges, i)) != NULL; i++)
+    {
+        if (e->tgt >= n_nsub)
+        {
+            retoff = sprintf(buf, "%d:%d-%d;", MOVE_DELEDGE, e->src, e->tgt);
+            if (retlen + retoff >= retsize)
+            {
+                retsize = retlen + retoff + 256;
+                ret = sresize(ret, retsize, char);
+            }
+            strcpy(ret + retlen, buf);
+            retlen += retoff;
+
+            delete_edge(solved->base, *e);
+            LOG(("Deleted edge %d-%d\n", e->src, e->tgt));
+        }
+    }
+    for (i = n_nsub; i < n_base; i++)
+    {
+        vx = solved->base->vtcs + i;
+        if (find234(solved->base->vertices, vx, NULL) != NULL)
+        {
+            retoff = sprintf(buf, "%d:%d;", MOVE_DELPOINT, vx->idx);
+            if (retlen + retoff >= retsize)
+            {
+                retsize = retlen + retoff + 256;
+                ret = sresize(ret, retsize, char);
+            }
+            strcpy(ret + retlen, buf);
+            retlen += retoff;
+
+            LOG(("Number of visible vertices is %d\n", count234(solved->base->vertices)));
+            del234(solved->base->vertices, vx);
+            LOG(("Deleted point %d\n", vx->idx));
+            LOG(("Number of visible vertices is %d\n", count234(solved->base->vertices)));
+        }
+    }
+
+    /*
+     * Contract the edges in all subgraphs such that every subgraph only consists of
+     * a single point.
+     */
+    for (i = 0; i < n_min; i++)
+    {
+        edge contre;
+        contre.src = i * n_1sub;
+        contre.tgt = contre.src + 1;
+        while (contre.tgt < (i + 1) * n_1sub)
+        {
+            if (isedge(solved->base->edges, contre.src, contre.tgt))
+            {
+                retoff = sprintf(buf, "%d:%d-%d;", MOVE_CONTREDGE, contre.src, contre.tgt);
+                if (retlen + retoff >= retsize)
+                {
+                    retsize = retlen + retoff + 256;
+                    ret = sresize(ret, retsize, char);
+                }
+                strcpy(ret + retlen, buf);
+                retlen += retoff;
+
+                LOG(("Number of visible vertices is %d\n", count234(solved->base->vertices)));
+                contract_edge(solved->base, contre.src, contre.tgt);
+                LOG(("Contracted edge %d-%d\n", contre.src, contre.tgt));
+                LOG(("Number of visible vertices is %d\n", count234(solved->base->vertices)));
+                contre.tgt = contre.src + 1;
+            }
+            else
+            {
+                contre.tgt++;
+            }
+        }
+    }
+
+    /*
+     * Check whether the found solution is valid. Doing it at this point may not be optimal
+     * performance wise but we can ensure that if we are able to find a solution we will
+     * always find it.
+     * 
+     * TODO:
+     * Implement another algorithm that can detect minors without any knowledge about the
+     * subgraphs.
+     */
+    if (!treesearch_isomorphism_test(solved->minor, solved->base))
+    {
+        sfree(ret);
+        free_game(solved);
+        *error = "Solution not known for the current puzzle state";
+        return NULL;
+    }
+
+    free_game(solved);
+    
+    return ret;
+}
+
+static bool game_can_format_as_text_now(const game_params *params)
+{
+    return true;
+}
+
+static char *game_text_format(const game_state *state)
+{
+    return NULL;
+}
+
+struct game_ui {
+
+    /* new position of the drag point */
+    point newpt;
+    /* index of the drag point */
+    int dragpt;
+
+    /* index of the point to delete */
+    int delpt;
+
+    /* index of the resulting point of the merge - the dominant point */
+    int mergept_dom;
+    /* index of the recessive point */
+    int mergept_rec;
+
+    /* indices of the vertices that are incident to the edge that should be deleted */
+    int deledge_src, deledge_tgt;
+
+    /* the currently ongoing move */
+    enum move current_move;
+
+};
+
+static game_ui *new_ui(const game_state *state)
+{
+    game_ui* ret = snew(game_ui);
+    ret->newpt.d = 1;
+    ret->dragpt = -1;
+    ret->delpt = -1;
+    ret->mergept_dom = -1;
+    ret->mergept_rec = -1;
+    ret->deledge_src = -1;
+    ret->deledge_tgt = -1;
+    ret->current_move = MOVE_IDLE;
+
+    return ret;
+}
+
+static void free_ui(game_ui *ui)
+{
+    sfree(ui);
+}
+
+static char *encode_ui(const game_ui *ui)
+{
+    return NULL;
+}
+
+static void decode_ui(game_ui *ui, const char *encoding)
+{
+}
+
+static void game_changed_state(game_ui *ui, const game_state *oldstate,
+                               const game_state *newstate)
+{
+    switch (ui->current_move)
+    {
+        case MOVE_DRAGPOINT:
+            ui->dragpt = -1;
+            break;
+        case MOVE_CONTREDGE:
+            ui->mergept_dom = -1;
+            ui->mergept_rec = -1;
+            break;
+        case MOVE_DELPOINT:
+            ui->delpt = -1;
+            break;
+        case MOVE_DELEDGE:
+            ui->deledge_src = -1;
+            ui->deledge_tgt = -1;
+            break;
+        case MOVE_IDLE:
+        default:;
+    }
+    ui->current_move = MOVE_IDLE;
+}
+
+struct game_drawstate {
+
+    int tilesize;
+
+    long grid_size;
+    long grid_margin;
+
+    long headline_height;
+
+    /* game window size */
+    long width, height;
+
+};
+
+#define POINT_TRESHOLD square(POINTRADIUS + 2)
+#define EDGE_TRESHOLD 2
+
+/* heuristic to determine whether a point has been clicked */
+#define point_heuristic(px, py, cx, cy) (square((px) - (cx)) + square((py) - (cy)))
+
+/*
+ * Heuristic to determine whether an edge has been clicked
+ */
+static double edge_heuristic(long esx, long esy, long etx, long ety,
+                            long cx, long cy)
+{
+    long dist_st = squarert(square(etx - esx) + square(ety - esy));
+    long dist_sc = squarert(square(cx - esx) + square(cy - esy));
+    long dist_ct = squarert(square(etx - cx) + square(ety - cy));
+    return dist_sc + dist_ct - dist_st;
+}
+
+static char *interpret_move(const game_state *state, game_ui *ui,
+                            const game_drawstate *ds,
+                            int x, int y, int button)
+{
+    /*
+     * Since one can only perform moves on the base graph which is placed in GRID_RIGHT
+     * and the point coordinates of a graph are given in relation to its grid one needs
+     * to subtract the grid size from the x-coordinate of the mouse event. Make sure the
+     * coordinates are correct, even if the player resizes the window.
+     */
+    long realx = (x - (state->base->grid * ds->grid_size)) * COORDUNIT / ds->tilesize;
+    long realy = (y - ds->headline_height) * COORDUNIT / ds->tilesize;
+
+    if (IS_MOUSE_DOWN(button))
+    {
+        int i;
+        int bestpt_idx = -1;
+        long ptheur;
+        long bestpt_heur = POINT_TRESHOLD;
+        double eheur;
+        double beste_heur = EDGE_TRESHOLD;
+        point* pt;
+        point* pts;
+        vertex* vx;
+        edge beste;
+        edge* e;
+        beste.src = beste.tgt = -1;
+
+        /*
+         * Discard the move if the button that has been pressed is neither LEFT_BUTTON nor
+         * RIGHT_BUTTON.
+         */
+        if (!(button == LEFT_BUTTON || button == RIGHT_BUTTON))
+            return NULL;
+
+        /*
+         * Get the index of the point with the shortest point heuristic. Do only take points
+         * into account with a heuristic smaller than POINT_TRESHOLD.
+         */
+        pts = state->base->points;
+        for (i = 0; (vx = index234(state->base->vertices, i)) != NULL; i++)
+        {
+            pt = pts + vx->idx;
+            ptheur = point_heuristic(pt->x, pt->y, realx, realy);
+            if (ptheur < bestpt_heur)
+            {
+                bestpt_heur = ptheur;
+                bestpt_idx = vx->idx;
+            }
+        }
+        /*
+         * Check whether there is any point with a point heuristic smaller than the
+         * treshold. If yes => game_ui requires update.
+         */
+        if (bestpt_heur < POINT_TRESHOLD)
+        {
+            if (button == LEFT_BUTTON)
+            {
+                ui->current_move = MOVE_DRAGPOINT;
+                ui->dragpt = bestpt_idx;
+                ui->newpt.x = realx;
+                ui->newpt.y = realy;
+                LOG(("Updated position of point %d to x:%ld, x:%ld\n", ui->dragpt, ui->newpt.x,
+                    ui->newpt.y));
+                return UI_UPDATE;
+            }
+            else if (state->base->vtcs[bestpt_idx].deg == 0)
+            {
+                ui->current_move = MOVE_DELPOINT;
+                ui->delpt = bestpt_idx;
+                LOG(("Selected point %d to delete\n", ui->delpt));
+                return UI_UPDATE;
+            }
+        }
+        else
+        {
+            /*
+            * Get the index of the edge with the shortest edge heuristic. Do only take edges
+            * into account with a heuristic smaller than EDGE_TRESHOLD.
+            */
+            for (i = 0; (e = index234(state->base->edges, i)) != NULL; i++)
+            {
+                eheur = edge_heuristic(pts[e->src].x, pts[e->src].y, pts[e->tgt].x,
+                                        pts[e->tgt].y, realx, realy);
+                if (eheur < beste_heur)
+                {
+                    beste_heur = eheur;
+                    beste = *e;
+                }
+            }
+            /*
+             * Check whether there is at least one edge with an edge heuristic smaller
+             * than the treshold. If yes => game_ui requires update.
+             */
+            if (beste_heur < EDGE_TRESHOLD)
+            {
+                if (button == LEFT_BUTTON)
+                {
+                    ui->current_move = MOVE_CONTREDGE;
+                    ui->mergept_dom = beste.src;
+                    ui->mergept_rec = beste.tgt;
+                    LOG(("Selected edge %d-%d to contract\n", ui->mergept_dom, ui->mergept_rec));
+                    return UI_UPDATE;
+                }
+                else
+                {
+                    ui->current_move = MOVE_DELEDGE;
+                    ui->deledge_src = beste.src;
+                    ui->deledge_tgt = beste.tgt;
+                    LOG(("Selected edge %d-%d to delete\n", ui->deledge_src, ui->deledge_tgt));
+                    return UI_UPDATE;
+                }
+            }
+        }
+    }
+    else if (IS_MOUSE_DRAG(button))
+    {
+        /* Check for an ongoing drag. If yes => game_ui requires update. */
+        if (ui->current_move == MOVE_DRAGPOINT)
+        {
+            ui->newpt.x = realx;
+            ui->newpt.y = realy;
+            LOG(("Updated position of drag point to x:%ld, y:%ld\n", ui->newpt.x, ui->newpt.y));
+            return UI_UPDATE;
+        }
+    }
+    else if (IS_MOUSE_RELEASE(button))
+    {
+        switch (ui->current_move)
+        {
+            /*
+             * Check for an ongoing drag. If yes, check whether the player wants to discard
+             * the drag. If no => make move, else => discard and update game_ui.
+             */
+            case MOVE_DRAGPOINT:
+                if (ui->newpt.x < 0 || ui->newpt.x > ds->grid_size * COORDUNIT / ds->tilesize
+                    || ui->newpt.y < 0 || ui->newpt.y > ds->grid_size * COORDUNIT / ds->tilesize)
+                {
+                    ui->current_move = MOVE_IDLE;
+                    ui->dragpt = -1;
+                    LOG(("Unselected drag point\n"));
+                    return UI_UPDATE;
+                }
+                else
+                {
+                    char buf[80];
+                    sprintf(buf, "%d:%d-%ld-%ld;", ui->current_move, ui->dragpt, ui->newpt.x,
+                            ui->newpt.y);
+                    LOG(("Dragging point %d to position x:%ld, y:%ld\n", ui->dragpt, ui->newpt.x,
+                        ui->newpt.y));
+                    return dupstr(buf);
+                }
+            /*
+             * Check for an ongoing contraction. If yes, check whether the player wants
+             * to discard the contraction. If no => make move, else => discard and update
+             * game_ui.
+             */
+            case MOVE_CONTREDGE:
+                if (x < state->base->grid * ds->grid_size
+                    || x > (state->base->grid * ds->grid_size) + ds->grid_size
+                    || y < ds->headline_height || y > ds->height)
+                {
+                    ui->current_move = MOVE_IDLE;
+                    ui->mergept_dom = -1;
+                    ui->mergept_rec = -1;
+                    LOG(("Unselected edge to contract\n"));
+                    return UI_UPDATE;
+                }
+                else
+                {
+                    char buf[80];
+                    sprintf(buf, "%d:%d-%d;", ui->current_move, ui->mergept_dom, ui->mergept_rec);
+                    LOG(("Contracting edge between vertices %d and %d\n", ui->mergept_dom,
+                        ui->mergept_rec));
+                    return dupstr(buf);
+                }
+            /*
+             * Check for an ongoing point deletion. If yes, check whether the player wants
+             * to discard the deletion. If no => make move, else => discard and update
+             * game_ui.
+             */
+            case MOVE_DELPOINT:
+                if (x < state->base->grid * ds->grid_size
+                    || x > (state->base->grid * ds->grid_size) + ds->grid_size
+                    || y < ds->headline_height || y > ds->height)
+                {
+                    ui->current_move = MOVE_IDLE;
+                    ui->delpt = -1;
+                    LOG(("Unselected point to delete\n"));
+                    return UI_UPDATE;
+                }
+                else
+                {
+                    char buf[80];
+                    sprintf(buf, "%d:%d;", ui->current_move, ui->delpt);
+                    LOG(("Deleting point %d\n", ui->delpt));
+                    return dupstr(buf);
+                }
+            /*
+             * Check for an ongoing edge deletion. If yes, check whether the player wants
+             * to discard the deletion. If no => make move, else => discard and update
+             * game_ui.
+             */
+            case MOVE_DELEDGE:
+                if (x < state->base->grid * ds->grid_size
+                    || x > (state->base->grid * ds->grid_size) + ds->grid_size
+                    || y < ds->headline_height || y > ds->height)
+                {
+                    ui->current_move = MOVE_IDLE;
+                    ui->deledge_src = -1;
+                    ui->deledge_tgt = -1;
+                    LOG(("Unselected edge to delete\n"));
+                    return UI_UPDATE;
+                }
+                else
+                {
+                    char buf[80];
+                    sprintf(buf, "%d:%d-%d;", ui->current_move, ui->deledge_src, ui->deledge_tgt);
+                    LOG(("Deleting edge between vertices %d and %d\n", ui->deledge_src,
+                        ui->deledge_tgt));
+                    return dupstr(buf);
+                }
+            case MOVE_IDLE:
+            default:;
+        }
+    }
+
+    return NULL;
+}
+
 static game_state *execute_move(const game_state *state, const char *move)
 {
+    int off;
     int idx;
-    int dom, rec;
-    enum move current_move;
-    long grid_size;
+    int src, tgt;
+    int current_move;
+    long grid_size = COORDLIMIT(state->params.n_base) * COORDUNIT;
     long x, y;
     vertex v;
     edge e;
     game_state* ret;
+    v.deg = 0;
+
+    ret = dup_game(state);
+    if (*move == 'S')
+    {
+        ret->solved = ret->cheated = true;
+        move++;
+    }
+    if (!(*move && isdigit((uint8) *move)))
+    {
+        LOG(("Failed to scan move, empty move string\n"));
+        free_game(ret);
+        return NULL;
+    }
 
     /*
      * Parse the move description. Return NULL if either the description is incorrect
      * or the move is invalid.
      */
-    if (!(*move && isdigit((uint8) *move))) return NULL;
-    current_move = atoi(move);
-    while(*move && isdigit((uint8) *move)) move++;
-    if (*move != ':') return NULL;
-    move++;
-    switch (current_move)
+    do
     {
-        case MOVE_DRAGPOINT:
-            if (!(*move && isdigit((uint8) *move))) return NULL;
-            idx = atoi(move);
-            while(*move && isdigit((uint8) *move)) move++;
-            if (*move != '-') return NULL;
-            move++;
-            if (!(*move && isdigit((uint8) *move))) return NULL;
-            x = atol(move);
-            while(*move && isdigit((uint8) *move)) move++;
-            if (*move != '-') return NULL;
-            move++;
-            if (!(*move && isdigit((uint8) *move))) return NULL;
-            y = atol(move);
-
-            grid_size = COORDLIMIT(state->params.n_base) * COORDUNIT;
-            if (idx < 0 || idx >= state->params.n_base || x < 0 || x > grid_size || y < 0
-                || y > grid_size)
-                return NULL;
-
-            ret = dup_game(state);
-
-            /* Assign the new coordinates to the dragged point */
-            ret->base->points[idx].x = x;
-            ret->base->points[idx].y = y;
-            break;
-        case MOVE_CONTREDGE:
-            if (!(*move && isdigit((uint8) *move))) return NULL;
-            dom = atoi(move);
-            while(*move && isdigit((uint8) *move)) move++;
-            if (*move != '-') return NULL;
-            move++;
-            if (!(*move && isdigit((uint8) *move))) return NULL;
-            rec = atoi(move);
-
-            if (dom == rec || !isedge(state->base->edges, dom, rec))
-                return NULL;
-
-            ret = dup_game(state);
-
-            /* Contract the edge between dom and rec */
-            contract_edge(ret->base, dom, rec);
-            break;
-        case MOVE_DELPOINT:
-            v.deg = 0;
-            if (!(*move && isdigit((uint8) *move))) return NULL;
-            v.idx = atoi(move);
-            while(*move && isdigit((uint8) *move)) move++;
-
-            if (v.idx < 0 && v.idx >= state->params.n_base)
-                return NULL;
-
-            ret = dup_game(state);
-
-            del234(ret->base->vertices, &v);
-            break;
-        case MOVE_DELEDGE:
-            if (!(*move && isdigit((uint8) *move))) return NULL;
-            e.src = atoi(move);
-            while(*move && isdigit((uint8) *move)) move++;
-            if (*move != '-') return NULL;
-            move++;
-            if (!(*move && isdigit((uint8) *move))) return NULL;
-            e.tgt = atoi(move);
-
-            if (e.src == e.tgt || !isedge(state->base->edges, e.src, e.tgt))
-                return NULL;
-
-            ret = dup_game(state);
-
-            delete_edge(ret->base, e);
-            break;
-        case MOVE_IDLE:
-        default:
+        if (sscanf(move, "%d:%n", &current_move, &off) != 1)
+        {
+            LOG(("Failed to scan new current move\n"));
+            free_game(ret);
             return NULL;
-    }
+        }
 
-    if (!(current_move == MOVE_DRAGPOINT || state->solved))
-        ret->solved = treesearch_isomorphism_test(ret->minor, ret->base);
+        move += off;
+
+        switch (current_move)
+        {
+            case MOVE_DRAGPOINT:
+                idx = -1;
+                x = y = -1;
+                if (sscanf(move, "%d-%ld-%ld;%n", &idx, &x, &y, &off) != 3
+                    || idx < 0 || idx >= state->params.n_base
+                    || x < 0 || x > grid_size || y < 0 || y > grid_size)
+                {
+                    LOG(("Failed to scan drag move,"));
+                    if (idx >= 0) LOG((" point %d\n", idx));
+                    else LOG(("\n"));
+                    free_game(ret);
+                    return NULL;
+                }
+
+                /* Assign the new coordinates to the dragged point */
+                ret->base->points[idx].x = x;
+                ret->base->points[idx].y = y;
+                LOG(("Dragged point %d to position x:%ld, y:%ld\n", idx, x, y));
+
+                move += off;
+                break;
+            case MOVE_CONTREDGE:
+                src = tgt = -1;
+                if (sscanf(move, "%d-%d;%n", &src, &tgt, &off) != 2
+                    || src == tgt || !isedge(ret->base->edges, src, tgt))
+                {
+                    LOG(("Failed to scan contraction move,"));
+                    if (src >= 0 && tgt >= 0) LOG((" edge %d-%d\n", src, tgt));
+                    else LOG(("\n"));
+                    free_game(ret);
+                    return NULL;
+                }
+                
+                /* Contract the edge between src and tgt */
+                contract_edge(ret->base, src, tgt);
+                LOG(("Contracted edge %d-%d\n", src, tgt));
+
+                move += off;
+                break;
+            case MOVE_DELPOINT:
+                idx = -1;
+                if (sscanf(move, "%d;%n", &idx, &off) != 1
+                    || (idx < 0 && idx >= state->params.n_base))
+                {
+                    LOG(("Failed to scan point deletion move,"));
+                    if (idx >= 0) LOG((" point %d\n", idx));
+                    else LOG(("\n"));
+                    free_game(ret);
+                    return NULL;
+                }
+
+                v.idx = idx;
+                del234(ret->base->vertices, &v);
+                LOG(("Deleted point %d\n", v.idx));
+
+                move += off;
+                break;
+            case MOVE_DELEDGE:
+                src = tgt = -1;
+                if (sscanf(move, "%d-%d;%n", &src, &tgt, &off) != 2
+                    || src == tgt || !isedge(ret->base->edges, src, tgt))
+                {
+                    LOG(("Failed to scan edge deletion move,"));
+                    if (src >= 0 && tgt >= 0) LOG((" edge %d-%d\n", src, tgt));
+                    else LOG(("\n"));
+                    free_game(ret);
+                    return NULL;
+                }
+
+                e.src = src;
+                e.tgt = tgt;
+                delete_edge(ret->base, e);
+                LOG(("Deleted edge %d-%d\n", e.src, e.tgt));
+
+                move += off;
+                break;
+            case MOVE_IDLE:
+                sscanf(move, ";%n", &off);
+                if (off != 1)
+                {
+                    LOG(("Failed to scan idle move\n"));
+                    free_game(ret);
+                    return NULL;
+                }
+
+                LOG(("Idled\n"));
+
+                move += off;
+                break;
+            default:
+                free_game(ret);
+                return NULL;
+        }
+
+        if (!(current_move == MOVE_DRAGPOINT || state->solved || ret->cheated))
+            ret->solved = treesearch_isomorphism_test(ret->minor, ret->base);
+    }
+    while (*move && isdigit((uint8) *move));
 
     return ret;
 }
@@ -2666,7 +2842,7 @@ const struct game thegame = {
     new_game,                                                           /* done */
     dup_game,                                                           /* done */
     free_game,                                                          /* done */
-    false, solve_game,
+    true, solve_game,
     false, game_can_format_as_text_now, game_text_format,
     new_ui,                                                             /* done */
     free_ui,                                                            /* done */
