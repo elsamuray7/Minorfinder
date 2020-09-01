@@ -2637,6 +2637,7 @@ static void game_free_drawstate(drawing *dr, game_drawstate *ds)
     sfree(ds);
 }
 
+#define SOLVE_ANIM_LENGTH 0.5F
 #define FLASH_LENGTH 0.3F
 
 static void game_redraw(drawing *dr, game_drawstate *ds,
@@ -2646,6 +2647,7 @@ static void game_redraw(drawing *dr, game_drawstate *ds,
 {
     int i;
     int bg_color;
+    float r_anim;
     long x_off;
     edge* e;
     vertex* vx;
@@ -2664,6 +2666,9 @@ static void game_redraw(drawing *dr, game_drawstate *ds,
         bg_color = COL_FLASH;
     else
         bg_color = COL_FLASH2;
+
+    if (oldstate) r_anim = animtime / SOLVE_ANIM_LENGTH;
+    else r_anim = 1.0F;
     
     /*
      * The initial contents of the window are not guaranteed and
@@ -2724,30 +2729,48 @@ static void game_redraw(drawing *dr, game_drawstate *ds,
     x_off = state->base->grid * ds->grid_size;
     for (i = 0; (e = index234(state->base->edges, i)) != NULL; i++)
     {
-        long xsrc, ysrc, xtgt, ytgt;
+        point psrc, ptgt;
+        point* oesrc;
+        point* oetgt;
         esrc = pts + e->src;
         etgt = pts + e->tgt;
         if (ui->dragpt == e->src)
         {
-            xsrc = (ui->newpt.x * ds->tilesize / COORDUNIT) + x_off;
-            ysrc = (ui->newpt.y * ds->tilesize / COORDUNIT) + ds->headline_height;
+            psrc.x = (ui->newpt.x * ds->tilesize / COORDUNIT) + x_off;
+            psrc.y = (ui->newpt.y * ds->tilesize / COORDUNIT) + ds->headline_height;
+        }
+        else if (oldstate)
+        {
+            oesrc = oldstate->base->points + e->src;
+            psrc.x = ((oesrc->x + ((float) (esrc->x - oesrc->x) * r_anim)) * ds->tilesize
+                    / COORDUNIT) + x_off;
+            psrc.y = ((oesrc->y + ((float) (esrc->y - oesrc->y) * r_anim)) * ds->tilesize
+                    / COORDUNIT) + ds->headline_height;
         }
         else
         {
-            xsrc = (esrc->x * ds->tilesize / COORDUNIT) + x_off;
-            ysrc = (esrc->y * ds->tilesize / COORDUNIT) + ds->headline_height;
+            psrc.x = (esrc->x * ds->tilesize / COORDUNIT) + x_off;
+            psrc.y = (esrc->y * ds->tilesize / COORDUNIT) + ds->headline_height;
         }
         if (ui->dragpt == e->tgt)
         {
-            xtgt = (ui->newpt.x * ds->tilesize / COORDUNIT) + + x_off;
-            ytgt = (ui->newpt.y * ds->tilesize / COORDUNIT) + ds->headline_height;
+            ptgt.x = (ui->newpt.x * ds->tilesize / COORDUNIT) + + x_off;
+            ptgt.y = (ui->newpt.y * ds->tilesize / COORDUNIT) + ds->headline_height;
+        }
+        else if (oldstate)
+        {
+            oetgt = oldstate->base->points + e->tgt;
+            ptgt.x = ((oetgt->x + ((float) (etgt->x - oetgt->x) * r_anim)) * ds->tilesize
+                    / COORDUNIT) + x_off;
+            ptgt.y = ((oetgt->y + ((float) (etgt->y - oetgt->y) * r_anim)) * ds->tilesize
+                    / COORDUNIT) + ds->headline_height;
         }
         else
         {
-            xtgt = (etgt->x * ds->tilesize / COORDUNIT) + x_off;
-            ytgt = (etgt->y * ds->tilesize / COORDUNIT) + ds->headline_height;
+            ptgt.x = (etgt->x * ds->tilesize / COORDUNIT) + x_off;
+            ptgt.y = (etgt->y * ds->tilesize / COORDUNIT) + ds->headline_height;
         }
-        draw_line(dr, xsrc, ysrc, xtgt, ytgt,
+        draw_line(dr, psrc.x, psrc.y, ptgt.x, ptgt.y,
                     (e->src == ui->mergept_dom && e->tgt == ui->mergept_rec) ?
                     COL_CONTREDGE :
                     ((e->src == ui->deledge_src && e->tgt == ui->deledge_tgt) ?
@@ -2757,19 +2780,29 @@ static void game_redraw(drawing *dr, game_drawstate *ds,
     /* Draw the base graph points in the intended grid */
     for (i = 0; (vx = index234(state->base->vertices, i)) != NULL; i++)
     {
-        long x, y, r;
+        point p;
+        point* op;
+        long r;
         if (vx->idx == ui->dragpt)
         {
-            x = (ui->newpt.x * ds->tilesize / COORDUNIT) + x_off;
-            y = (ui->newpt.y * ds->tilesize / COORDUNIT) + ds->headline_height;
+            p.x = (ui->newpt.x * ds->tilesize / COORDUNIT) + x_off;
+            p.y = (ui->newpt.y * ds->tilesize / COORDUNIT) + ds->headline_height;
+        }
+        else if (oldstate)
+        {
+            op = oldstate->base->points + vx->idx;
+            p.x = ((op->x + ((float) (pts[vx->idx].x - op->x) * r_anim)) * ds->tilesize
+                    / COORDUNIT) + x_off;
+            p.y = ((op->y + ((float) (pts[vx->idx].y - op->y) * r_anim)) * ds->tilesize
+                    / COORDUNIT) + ds->headline_height;
         }
         else
         {
-            x = (pts[vx->idx].x * ds->tilesize / COORDUNIT) + x_off;
-            y = (pts[vx->idx].y * ds->tilesize / COORDUNIT) + ds->headline_height;
+            p.x = (pts[vx->idx].x * ds->tilesize / COORDUNIT) + x_off;
+            p.y = (pts[vx->idx].y * ds->tilesize / COORDUNIT) + ds->headline_height;
         }
         r = POINTRADIUS * ds->tilesize / COORDUNIT;
-        draw_circle(dr, x, y, r,
+        draw_circle(dr, p.x, p.y, r,
                     (vx->idx == ui->dragpt) ? COL_DRAGPOINT :
                     ((vx->idx == ui->delpt) ? COL_DELPOINT :
 #if DEBUG
@@ -2788,7 +2821,11 @@ static void game_redraw(drawing *dr, game_drawstate *ds,
 static float game_anim_length(const game_state *oldstate,
                               const game_state *newstate, int dir, game_ui *ui)
 {
-    return 0.0F;
+    if (((dir < 0) ? oldstate : newstate)->solved
+        && ((dir < 0) ? oldstate : newstate)->cheated)
+        return SOLVE_ANIM_LENGTH;
+    else
+        return 0.0F;
 }
 
 static float game_flash_length(const game_state *oldstate,
@@ -2862,5 +2899,5 @@ const struct game thegame = {
     false, false, game_print_size, game_print,
     false,			       /* wants_statusbar */
     false, game_timing_state,
-    0,				       /* flags */
+    SOLVE_ANIMATES,				       /* flags */
 };
