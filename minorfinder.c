@@ -579,7 +579,7 @@ static int vertcmp(void *av, void *bv)
  */
 
 #define POINTRADIUS 6
-#define CROSSPOINT_THRESHOLD POINTRADIUS
+#define CROSSPOINT_THRESHOLD (POINTRADIUS / 2)
 
 #define square(x) ((x) * (x))
 
@@ -786,13 +786,13 @@ static void addedges(tree234* edges, vertex* vertices, point* points, const int 
  * These parameters are highly sensitive, changing them may cause problems when
  * generating new game descriptions.
  */
-#define COORDMARGIN 1
+#define COORDMARGIN 0.5
 #define COORDLIMIT(n) ((n) + (2 * COORDMARGIN))
 #define COORDUNIT 24
 
-#define MINORRADIUS(n) ((n) / 3)
+#define MINORRADIUS(n) ((4 * (n)) / 11)
 #define SUBGRAPH_DISTANCE (4 * POINTRADIUS)
-#define SUBGRAPH_POINTENTROPY 4
+#define SUBGRAPH_POINTENTROPY 3
 #define OVERLAYPOINT_TRESHOLD square(4 * POINTRADIUS)
 
 static char *new_game_desc(const game_params *params, random_state *rs,
@@ -1744,12 +1744,12 @@ static bool treesearch_isomorphism_test(const graph* the_graph, const graph* cmp
      * cells of a node and the union of all cells of a node must contain all vertices
      * of the graph for which we create the search tree - the comparison graph.
      * Then we refine for each node the cells that contain more than one vertex.
-     * Each refinement gives us another set of child nodes. We reach a leaf when we
-     * refine a node such that all cells of the arising child do only contain a single
-     * vertex. This means we just found a permutation for the comparison graph which
-     * could suit the test graph. If the permutation suits the test graph, i.e. if we
-     * apply it to the test graph and it turns out that the edge sets match, then we've
-     * found an isomorphism between the graphs.
+     * Each refinement gives us another set of child nodes. We reach a leaf when
+     * we refine a node such that all cells of the arising child do only contain
+     * a single vertex. This means we just found a permutation for the comparison
+     * graph which could suit the test graph. If the permutation suits the test graph,
+     * i.e. if we apply it to the test graph and it turns out that the edge sets match,
+     * then we've found an isomorphism between the graphs.
      */
     root = snew(node);
     root->ncells = tmp;
@@ -1899,14 +1899,9 @@ static char *solve_game(const game_state *state, const game_state *currstate,
      */
     ret = snewn(retsize, char);
 
-    if (currstate->cheated)
+    if (currstate->solved)
     {
         retoff = sprintf(buf, "%d:;", MOVE_IDLE);
-        if (retlen + retoff >= retsize)
-        {
-            retsize = retlen + retoff + 256;
-            ret = sresize(ret, retsize, char);
-        }
         strcpy(ret + retlen, buf);
         retlen += retoff;
 
@@ -2378,7 +2373,8 @@ static game_state *execute_move(const game_state *state, const char *move)
     ret = dup_game(state);
     if (*move == 'S')
     {
-        ret->solved = ret->cheated = true;
+        if (!ret->solved) ret->cheated = true;
+        ret->solved = true;
         move++;
     }
     if (!(*move && isdigit((uint8) *move)))
@@ -2441,6 +2437,7 @@ static game_state *execute_move(const game_state *state, const char *move)
                 /* Contract the edge between src and tgt */
                 contract_edge(ret->base, src, tgt);
                 LOG(("Contracted edge %d-%d\n", src, tgt));
+                if (ret->solved) ret->solved = false;
 
                 move += off;
                 break;
@@ -2459,6 +2456,7 @@ static game_state *execute_move(const game_state *state, const char *move)
                 v.idx = idx;
                 del234(ret->base->vertices, &v);
                 LOG(("Deleted point %d\n", v.idx));
+                if (ret->solved) ret->solved = false;
 
                 move += off;
                 break;
@@ -2478,6 +2476,7 @@ static game_state *execute_move(const game_state *state, const char *move)
                 e.tgt = tgt;
                 delete_edge(ret->base, e);
                 LOG(("Deleted edge %d-%d\n", e.src, e.tgt));
+                if (ret->solved) ret->solved = false;
 
                 move += off;
                 break;
@@ -2499,7 +2498,7 @@ static game_state *execute_move(const game_state *state, const char *move)
                 return NULL;
         }
 
-        if (!(current_move == MOVE_DRAGPOINT || state->solved || ret->cheated))
+        if (!(current_move == MOVE_DRAGPOINT || state->solved || ret->solved))
             ret->solved = treesearch_isomorphism_test(ret->minor, ret->base);
     }
     while (*move && isdigit((uint8) *move));
@@ -2842,7 +2841,7 @@ const struct game thegame = {
     new_game,                                                           /* done */
     dup_game,                                                           /* done */
     free_game,                                                          /* done */
-    true, solve_game,
+    true, solve_game,                                                   /* done */
     false, game_can_format_as_text_now, game_text_format,
     new_ui,                                                             /* done */
     free_ui,                                                            /* done */
