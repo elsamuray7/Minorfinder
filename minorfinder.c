@@ -40,10 +40,12 @@ enum {
     COL_MINORPOINT,
     COL_DRAGPOINT,
     COL_DELPOINT,
+    COL_HIDEPOINT,
     COL_POINTOUTLINE,
     COL_EDGE,
     COL_CONTREDGE,
     COL_DELEDGE,
+    COL_HIDEEDGE,
     COL_FLASH,
     COL_FLASH2,
     COL_TEXT,
@@ -2567,6 +2569,11 @@ static float *game_colours(frontend *fe, int *ncolours)
     ret[(COL_DELPOINT * 3) + 1] = 0.0F;
     ret[(COL_DELPOINT * 3) + 2] = 1.0F;
 
+    /* light blue */
+    ret[(COL_HIDEPOINT * 3) + 0] = 0.3F;
+    ret[(COL_HIDEPOINT * 3) + 1] = 0.7F;
+    ret[(COL_HIDEPOINT * 3) + 2] = 1.0F;
+
     /* black */
     ret[(COL_POINTOUTLINE * 3) + 0] = 0.0F;
     ret[(COL_POINTOUTLINE * 3) + 1] = 0.0F;
@@ -2586,6 +2593,11 @@ static float *game_colours(frontend *fe, int *ncolours)
     ret[(COL_DELEDGE * 3) + 0] = 0.7F;
     ret[(COL_DELEDGE * 3) + 1] = 0.0F;
     ret[(COL_DELEDGE * 3) + 2] = 1.0F;
+
+    /* grey */
+    ret[(COL_HIDEEDGE * 3) + 0] = 0.4F;
+    ret[(COL_HIDEEDGE * 3) + 1] = 0.4F;
+    ret[(COL_HIDEEDGE * 3) + 2] = 0.4F;
 
     /* white */
     ret[(COL_FLASH * 3) + 0] = 1.0F;
@@ -2637,7 +2649,7 @@ static void game_free_drawstate(drawing *dr, game_drawstate *ds)
     sfree(ds);
 }
 
-#define SOLVE_ANIM_LENGTH 0.5F
+#define ANIM_LENGTH 0.7F
 #define FLASH_LENGTH 0.3F
 
 static void game_redraw(drawing *dr, game_drawstate *ds,
@@ -2667,7 +2679,7 @@ static void game_redraw(drawing *dr, game_drawstate *ds,
     else
         bg_color = COL_FLASH2;
 
-    if (oldstate) r_anim = animtime / SOLVE_ANIM_LENGTH;
+    if (oldstate) r_anim = animtime / ANIM_LENGTH;
     else r_anim = 1.0F;
     
     /*
@@ -2727,8 +2739,11 @@ static void game_redraw(drawing *dr, game_drawstate *ds,
     /* Draw the base graph edges in the intended grid */
     pts = state->base->points;
     x_off = state->base->grid * ds->grid_size;
-    for (i = 0; (e = index234(state->base->edges, i)) != NULL; i++)
+    for (i = 0; (e = index234((dir > 0 && oldstate) ? oldstate->base->edges :
+        state->base->edges, i)) != NULL; i++)
     {
+        bool hide = find234((dir < 0 && oldstate) ? oldstate->base->edges :
+                            state->base->edges, e, NULL) == NULL;
         point psrc, ptgt;
         point* oesrc;
         point* oetgt;
@@ -2775,14 +2790,20 @@ static void game_redraw(drawing *dr, game_drawstate *ds,
                     COL_CONTREDGE :
                     ((e->src == ui->deledge_src && e->tgt == ui->deledge_tgt) ?
                     COL_DELEDGE :
-                    COL_EDGE));
+                    ( hide ? 
+                    COL_HIDEEDGE : COL_EDGE)));
     }
     /* Draw the base graph points in the intended grid */
-    for (i = 0; (vx = index234(state->base->vertices, i)) != NULL; i++)
+    for (i = 0; (vx = index234((dir > 0 && oldstate) ? oldstate->base->vertices :
+        state->base->vertices, i)) != NULL; i++)
     {
+        bool hide = find234((dir < 0 && oldstate) ? oldstate->base->vertices :
+                            state->base->vertices, ((dir < 0 && oldstate) ?
+                            oldstate->base->vtcs : state->base->vtcs) + vx->idx, NULL)
+                    == NULL;
+        long r;
         point p;
         point* op;
-        long r;
         if (vx->idx == ui->dragpt)
         {
             p.x = (ui->newpt.x * ds->tilesize / COORDUNIT) + x_off;
@@ -2805,12 +2826,12 @@ static void game_redraw(drawing *dr, game_drawstate *ds,
         draw_circle(dr, p.x, p.y, r,
                     (vx->idx == ui->dragpt) ? COL_DRAGPOINT :
                     ((vx->idx == ui->delpt) ? COL_DELPOINT :
+                    ( hide ? COL_HIDEPOINT :
 #if DEBUG
-                    (vx->idx < state->params.n_min * (state->params.n_base / state->params.n_min)) ?
-                    COL_SUBPOINT :
-                    COL_BASEPOINT),
+                    (vx->idx < state->params.n_min * (state->params.n_base
+                    / state->params.n_min)) ? COL_SUBPOINT : COL_BASEPOINT)),
 #else
-                    COL_BASEPOINT),
+                    COL_BASEPOINT)),
 #endif
                     COL_POINTOUTLINE);
     }
@@ -2823,7 +2844,7 @@ static float game_anim_length(const game_state *oldstate,
 {
     if (((dir < 0) ? oldstate : newstate)->solved
         && ((dir < 0) ? oldstate : newstate)->cheated)
-        return SOLVE_ANIM_LENGTH;
+        return ANIM_LENGTH;
     else
         return 0.0F;
 }
