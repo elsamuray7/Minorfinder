@@ -2717,23 +2717,24 @@ static void game_redraw(drawing *dr, game_drawstate *ds,
     x_off = state->minor->grid * ds->grid_size;
     for (i = 0; (e = index234(state->minor->edges, i)) != NULL; i++)
     {
-        long xsrc, ysrc, xtgt, ytgt;
+        point psrc, ptgt;
         esrc = pts + e->src;
         etgt = pts + e->tgt;
-        xsrc = (esrc->x * ds->tilesize / COORDUNIT) + x_off;
-        ysrc = (esrc->y * ds->tilesize / COORDUNIT) + ds->headline_height;
-        xtgt = (etgt->x * ds->tilesize / COORDUNIT) + x_off;
-        ytgt = (etgt->y * ds->tilesize / COORDUNIT) + ds->headline_height;
-        draw_line(dr, xsrc, ysrc, xtgt, ytgt, COL_EDGE);
+        psrc.x = (esrc->x * ds->tilesize / COORDUNIT) + x_off;
+        psrc.y = (esrc->y * ds->tilesize / COORDUNIT) + ds->headline_height;
+        ptgt.x = (etgt->x * ds->tilesize / COORDUNIT) + x_off;
+        ptgt.y = (etgt->y * ds->tilesize / COORDUNIT) + ds->headline_height;
+        draw_line(dr, psrc.x, psrc.y, ptgt.x, ptgt.y, COL_EDGE);
     }
     /* Draw the minor points in the intended grid */
     for (i = 0; (vx = index234(state->minor->vertices, i)) != NULL; i++)
     {
-        long x, y, r;
-        x = (pts[vx->idx].x * ds->tilesize / COORDUNIT) + x_off;
-        y = (pts[vx->idx].y * ds->tilesize / COORDUNIT) + ds->headline_height;
+        long r;
+        point p;
+        p.x = (pts[vx->idx].x * ds->tilesize / COORDUNIT) + x_off;
+        p.y = (pts[vx->idx].y * ds->tilesize / COORDUNIT) + ds->headline_height;
         r = POINTRADIUS * ds->tilesize / COORDUNIT;
-        draw_circle(dr, x, y, r, COL_MINORPOINT, COL_POINTOUTLINE);
+        draw_circle(dr, p.x, p.y, r, COL_MINORPOINT, COL_POINTOUTLINE);
     }
 
     /* Draw the base graph edges in the intended grid */
@@ -2742,6 +2743,10 @@ static void game_redraw(drawing *dr, game_drawstate *ds,
     for (i = 0; (e = index234((dir > 0 && oldstate) ? oldstate->base->edges :
         state->base->edges, i)) != NULL; i++)
     {
+        /*
+         * Check whether there is a solve animation ongoing after which
+         * the current edge will disappear.
+         */
         bool hide = find234((dir < 0 && oldstate) ? oldstate->base->edges :
                             state->base->edges, e, NULL) == NULL;
         point psrc, ptgt;
@@ -2749,11 +2754,19 @@ static void game_redraw(drawing *dr, game_drawstate *ds,
         point* oetgt;
         esrc = pts + e->src;
         etgt = pts + e->tgt;
+        /*
+         * Check whether the edge source vertex is being dragged. Use the
+         * vertex's new coordinates if so.
+         */
         if (ui->dragpt == e->src)
         {
             psrc.x = (ui->newpt.x * ds->tilesize / COORDUNIT) + x_off;
             psrc.y = (ui->newpt.y * ds->tilesize / COORDUNIT) + ds->headline_height;
         }
+        /*
+         * Check whether there is a solve animation ongoing. Calculate the
+         * vertex's current animated position if so.
+         */
         else if (oldstate)
         {
             oesrc = oldstate->base->points + e->src;
