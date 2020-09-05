@@ -1715,7 +1715,7 @@ static int mappingcmp(void* av, void* bv)
  * graph. The algorithm builds on the idea that vertices with different degree can't
  * be a vertex pair of a permutation that is an isomorphism between two graphs.
  */
-static bool treesearch_isomorphism_test(const graph* the_graph, const graph* cmp_graph)
+static bool isomorphism_degheuristic(const graph* the_graph, const graph* cmp_graph)
 {
     bool found;
     int i, j;
@@ -1729,6 +1729,8 @@ static bool treesearch_isomorphism_test(const graph* the_graph, const graph* cmp
     node* n;
     node* root;
     tree234* lifo;
+
+    LOG(("------------------------------\n"));
     
     /* Check whether the graphs have the same number of vertices */
     if (nvtcs != (tmp = count234(cmp_graph->vertices)))
@@ -1887,12 +1889,169 @@ static bool treesearch_isomorphism_test(const graph* the_graph, const graph* cmp
         }
     }
 
+    LOG(("------------------------------\n"));
+
     sfree(vtcs_the);
     free_node(root, true);
     freetree234(lifo);
 
     return found;
 }
+
+#define ISOMORPHISM_TEST_BENCHMARKS
+#ifdef ISOMORPHISM_TEST_BENCHMARKS
+/*
+ * Check whether there exists an isomorphism between a test graph and a comparison
+ * graph. The algorithm is a simple bruteforce algorithm that checks for all possible
+ * permutations whether it is an isomorphism between the graphs.
+ */
+static bool isomorphism_bruteforce(const graph* the_graph, const graph* cmp_graph)
+{
+    bool found;
+    int i, j;
+    int tmp;
+    int nvtcs = count234(the_graph->vertices);
+    vertex* vx;
+    vertex* vtcs_the;
+    vertex* vtcs_cmp;
+    vertex* permu;
+    edge* e;
+    node* n;
+    node* root;
+    tree234* lifo;
+
+    LOG(("------------------------------\n"));
+    
+    /* Check whether the graphs have the same number of vertices */
+    if (nvtcs != (tmp = count234(cmp_graph->vertices)))
+    {
+        LOG(("The graphs have different amounts of vertices (%d and %d)\n",
+            nvtcs, tmp));
+        return false;
+    }
+
+    /* Check whether the graphs have identical vertex degree distributions */
+    vtcs_the = snewn(nvtcs, vertex);
+    for (i = 0; (vx = index234(the_graph->vertices, i)) != NULL; i++)
+    {
+        vtcs_the[i] = *vx;
+#if DEBUG
+        if (i > 0) assert(vtcs_the[i-1].deg <= vtcs_the[i].deg);
+#endif
+    }
+    vtcs_cmp = snewn(nvtcs, vertex);
+    for (i = 0; (vx = index234(cmp_graph->vertices, i)) != NULL; i++)
+    {
+        vtcs_cmp[i] = *vx;
+#if DEBUG
+        if (i > 0) assert(vtcs_cmp[i-1].deg <= vtcs_cmp[i].deg);
+#endif
+    }
+
+    for (i = 0; i < nvtcs; i++)
+    {
+        LOG(("Vertices at position %d have indices %d and %d and degrees %d and %d\n",
+            i, vtcs_the[i].idx, vtcs_cmp[i].idx, vtcs_the[i].deg, vtcs_cmp[i].deg));
+        if (vtcs_the[i].deg != vtcs_cmp[i].deg)
+        {
+            LOG(("The graphs have different vertex degree distributions\n"));
+            sfree(vtcs_the);
+            sfree(vtcs_cmp);
+            return false;
+        }
+    }
+
+    root = snew(node);
+    root->ncells = 1;
+    root->cells = snewn(root->ncells, vertex*);
+    root->cellsizes = snewn(root->ncells, int);
+    root->isleaf = true;
+    LOG(("Initialized root node with %d cells\n", root->ncells));
+    *root->cellsizes = nvtcs;
+    *root->cells = snewn(*root->cellsizes, vertex);
+    for (j = 0; j < *root->cellsizes; j++)
+    {
+        vx = (*root->cells) + j;
+        *vx = vtcs_cmp[j];
+        LOG(("Added vertex %d with index %d and degree %d to root cell 0 at"\
+            " position %d\n", j, vtcs_cmp[j].idx, vtcs_cmp[j].deg, j));
+    }
+    sfree(vtcs_cmp);
+    tmp = 0;
+    lifo = newtree234(NULL);
+    addpos234(lifo, root, tmp++);
+    LOG(("Initialized lifo queue with root node\nStarting depth first search for"\
+        " an isomorphism between the graphs\n"));
+    while (tmp)
+    {
+        n = delpos234(lifo, --tmp);
+        LOG(("Fetched node at position %d from the lifo queue\n", tmp));
+        if((permu = expand_node(n)))
+        {
+            mapping* mappings;
+            tree234* map = newtree234(mappingcmp);
+            found = true;
+            LOG(("Found vertex permuation that could be an ismomorphism"\
+                " between the graphs\n"));
+            /*
+             * We don't need to check whether the test graph has additional edges that
+             * are missing in the comparison graph since we already compared the vertex
+             * degree distibutions of both graphs. Thus the sum of all vertex degrees
+             * must be equal for both graphs and the number of edges respectively.
+             */
+            mappings = snewn(nvtcs, mapping);
+            for (j = 0; j < nvtcs; j++)
+            {
+                mappings[j].key = permu[j].idx;
+                mappings[j].value = vtcs_the[j].idx;
+                add234(map, mappings + j);
+            }
+            sfree(permu);
+            for (j = 0; (e = index234(cmp_graph->edges, j)) != NULL; j++)
+            {
+                mapping msrc, mtgt;
+                msrc.key = e->src;
+                mtgt.key = e->tgt;
+                msrc.value = mtgt.value = -1;
+                msrc.value = ((mapping*) find234(map, &msrc, mappingcmp))->value;
+                mtgt.value = ((mapping*) find234(map, &mtgt, mappingcmp))->value;
+                if (!isedge(the_graph->edges, msrc.value, mtgt.value))
+                {
+                    found = false;
+                    LOG(("Permutation is no isomorphism between the graphs,\n"\
+                        " missing edge %d-%d in the test graph\n", msrc.value,
+                        mtgt.value));
+                    break;
+                }
+            }
+            sfree(mappings);
+            freetree234(map);
+            if (found)
+            {
+                LOG(("Permutation is an isomorphism between the graphs\n"));
+                break;
+            }
+        }
+        else
+        {
+            for (i = n->nchildren - 1; i >= 0; i--)
+            {
+                addpos234(lifo, n->children + i, tmp++);
+                LOG(("Added child node %d at position %d to lifo queue\n", i,
+                    tmp - 1));
+            }
+        }
+    }
+
+    LOG(("------------------------------\n"));
+
+    sfree(vtcs_the);
+    free_node(root, true);
+    freetree234(lifo);
+
+    return found;
+}
+#endif
 
 /*
  * A move that can be performed by a player
@@ -2038,10 +2197,9 @@ static char *solve_game(const game_state *state, const game_state *currstate,
     {
         edge contre;
         contre.src = i * n_1sub;
-        while (contre.src < ((i + 1) * n_1sub) - 1)
+        for (contre.src = i * n_1sub; contre.src < ((i + 1) * n_1sub) - 1; contre.src++)
         {
-            contre.tgt = contre.src + 1;
-            while (contre.tgt < (i + 1) * n_1sub)
+            for (contre.tgt = contre.src + 1; contre.tgt < (i + 1) * n_1sub; contre.tgt++)
             {
                 if (isedge(solved->base->edges, contre.src, contre.tgt))
                 {
@@ -2086,11 +2244,9 @@ static char *solve_game(const game_state *state, const game_state *currstate,
                     LOG(("Contracted edge %d-%d\n", contre.src, contre.tgt));
                     LOG(("Number of visible vertices is %d\n", count234(solved->base->vertices)));
                 }
-                next_tgt:
-                contre.tgt++;
+                next_tgt:;
             }
-            next_src:
-            contre.src++;
+            next_src:;
         }
     }
     for (i = 0; (e = index234(solved->base->edges, i)) != NULL; i++)
@@ -2135,8 +2291,11 @@ static char *solve_game(const game_state *state, const game_state *currstate,
      * Implement another algorithm that can detect minors without any knowledge about the
      * subgraphs.
      */
-    if (!treesearch_isomorphism_test(solved->minor, solved->base))
+    if (!(solved->solved = isomorphism_degheuristic(solved->minor, solved->base)))
     {
+#ifdef ISOMORPHISM_TEST_BENCHMARKS
+        assert(solved->solved == isomorphism_bruteforce(solved->minor, solved->base));
+#endif
         sfree(ret);
         free_game(solved);
         *error = "Solution not known for the current puzzle state";
@@ -2639,7 +2798,12 @@ static game_state *execute_move(const game_state *state, const char *move)
         }
 
         if (!(current_move == MOVE_DRAGPOINT || state->solved || ret->solved))
-            ret->solved = treesearch_isomorphism_test(ret->minor, ret->base);
+        {
+            ret->solved = isomorphism_degheuristic(ret->minor, ret->base);
+#ifdef ISOMORPHISM_TEST_BENCHMARKS
+            assert(ret->solved == isomorphism_bruteforce(ret->minor, ret->base));
+#endif
+        }
     }
     while (*move && isdigit((uint8) *move));
 
