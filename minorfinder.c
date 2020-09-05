@@ -17,7 +17,7 @@
 #include "tree234.h"
 
 /* debug mode */
-#define DEBUG false
+#define DEBUG true
 
 /* enable or disable console log */
 #if DEBUG
@@ -1905,7 +1905,6 @@ enum move {
     MOVE_DELEDGE = 0x8
 };
 
-#define SHARE_ADJACENT_VERTEX_HEURISTIC
 #ifdef SHARE_ADJACENT_VERTEX_HEURISTIC
 /*
  * Check whether two vertices from different subgraphs are adjacent to the same
@@ -1925,7 +1924,6 @@ static bool share_adjacent_vertex(const game_state* state, int vxa, int vxb, int
     return false;
 }
 #endif
-#define REPRESENT_MINOR_EDGE_HEURISTIC
 #ifdef REPRESENT_MINOR_EDGE_HEURISTIC
 /*
  * Check whether two adjacent vertices from different subgraphs represent an
@@ -1935,6 +1933,18 @@ static bool represent_minor_edge(const game_state* state, int vxa, int vxb, int 
 {
     if (vxa / n1 == vxb / n1) return false;
     return isedge(state->minor->edges, vxa / n1, vxb / n1);
+}
+#endif
+#define EDGE_COUNT_DIFFERENCE_HEURISTIC
+#ifdef EDGE_COUNT_DIFFERENCE_HEURISTIC
+static int edge_count_difference(const game_state* state, int vxa, int vxb)
+{
+    int diff;
+    game_state* tmp = dup_game(state);
+    contract_edge(tmp->base, vxa, vxb);
+    diff = count234(tmp->base->edges) - count234(tmp->minor->edges);
+    free_game(tmp);
+    return diff;
 }
 #endif
 
@@ -2092,8 +2102,8 @@ static char *solve_game(const game_state *state, const game_state *currstate,
             {
                 if (vx->idx < n_nsub
                     && ((e->src / n_1sub != e->tgt / n_1sub && vx->idx / n_1sub == e->tgt / n_1sub
-                        && (!share_adjacent_vertex(solved, e->src, e->tgt, n_1sub)
-                            || !represent_minor_edge(solved, e->src, e->tgt, n_1sub)))))
+                            && (edge_count_difference(solved, e->src, e->tgt) >= 0))
+                        || (solved->base->vtcs[e->src].deg == 1 || solved->base->vtcs[e->tgt].deg == 1)))
                 {
                     LOG(("Vertex %d has eaten vertex %d from same subgraph as vertex %d\n",
                         e->src, vx->idx, e->tgt));
@@ -2107,9 +2117,10 @@ static char *solve_game(const game_state *state, const game_state *currstate,
                     retlen += retoff;
 
                     LOG(("Number of visible vertices is %d\n", count234(solved->base->vertices)));
+                    LOG(("Contracting edge %d-%d\n", e->src, e->tgt));
                     contract_edge(solved->base, e->src, e->tgt);
-                    LOG(("Contracted edge %d-%d\n", e->src, e->tgt));
                     LOG(("Number of visible vertices is %d\n", count234(solved->base->vertices)));
+                    break;
                 }
             }
         }
