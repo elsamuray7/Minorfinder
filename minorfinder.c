@@ -13,6 +13,8 @@
 #include <ctype.h>
 #include <math.h>
 
+#include <time.h>
+
 #include "puzzles.h"
 #include "tree234.h"
 
@@ -1730,7 +1732,8 @@ static bool isomorphism_degheuristic(const graph* the_graph, const graph* cmp_gr
     node* root;
     tree234* lifo;
 
-    LOG(("------------------------------\n"));
+    LOG(("--- Starting isomorphism test with degree heuristic ---\n"));
+    clock_t begin = clock();
     
     /* Check whether the graphs have the same number of vertices */
     if (nvtcs != (tmp = count234(cmp_graph->vertices)))
@@ -1889,7 +1892,10 @@ static bool isomorphism_degheuristic(const graph* the_graph, const graph* cmp_gr
         }
     }
 
-    LOG(("------------------------------\n"));
+    clock_t end = clock();
+    double duration = (double) ((end - begin) * 1000) / CLOCKS_PER_SEC;
+    LOG(("--- Finished isomorphism test with degree heuristic\nDuration: %lf ---\n",
+        duration));
 
     sfree(vtcs_the);
     free_node(root, true);
@@ -1920,7 +1926,8 @@ static bool isomorphism_bruteforce(const graph* the_graph, const graph* cmp_grap
     node* root;
     tree234* lifo;
 
-    LOG(("------------------------------\n"));
+    LOG(("--- Starting bruteforce isomorphism test ---\n"));
+    clock_t begin = clock();
     
     /* Check whether the graphs have the same number of vertices */
     if (nvtcs != (tmp = count234(cmp_graph->vertices)))
@@ -2043,7 +2050,9 @@ static bool isomorphism_bruteforce(const graph* the_graph, const graph* cmp_grap
         }
     }
 
-    LOG(("------------------------------\n"));
+    clock_t end = clock();
+    double duration = (double) ((end - begin) * 1000) / CLOCKS_PER_SEC;
+    LOG(("--- Finished bruteforce isomorphism test\nDuration: %lf ---\n", duration));
 
     sfree(vtcs_the);
     free_node(root, true);
