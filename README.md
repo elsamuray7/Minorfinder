@@ -15,8 +15,3 @@ The game begins by showing the player a bigger graph (the original graph) and a 
 
 ## Run the game
 - Run `./minorfinder`
-
-## Submitting issues
-- <b>Description</b> of the issue
-- <b>Suggestions / Solutions</b> for the issue
-- <b>Label</b> the issue, e.g. <i>enhancement, bug, etc.</i>

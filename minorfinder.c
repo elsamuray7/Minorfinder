@@ -1712,6 +1712,8 @@ static int mappingcmp(void* av, void* bv)
     return mappingcmpC(av, bv);
 }
 
+#define ISOMORPHISM_TEST_BENCHMARKS
+
 /*
  * Check whether there exists an isomorphism between a test graph and a comparison
  * graph. The algorithm builds on the idea that vertices with different degree can't
@@ -1732,8 +1734,9 @@ static bool isomorphism_degheuristic(const graph* the_graph, const graph* cmp_gr
     node* root;
     tree234* lifo;
 
-    LOG(("--- Starting isomorphism test with degree heuristic ---\n"));
+#ifdef ISOMORPHISM_TEST_BENCHMARKS
     clock_t begin = clock();
+#endif
     
     /* Check whether the graphs have the same number of vertices */
     if (nvtcs != (tmp = count234(cmp_graph->vertices)))
@@ -1892,10 +1895,12 @@ static bool isomorphism_degheuristic(const graph* the_graph, const graph* cmp_gr
         }
     }
 
+#ifdef ISOMORPHISM_TEST_BENCHMARKS
     clock_t end = clock();
     double duration = (double) ((end - begin) * 1000) / CLOCKS_PER_SEC;
-    LOG(("--- Finished isomorphism test with degree heuristic\nDuration: %lf ---\n",
-        duration));
+    printf("Finished isomorphism test with degree heuristic, duration: %lf\n",
+        duration);
+#endif
 
     sfree(vtcs_the);
     free_node(root, true);
@@ -1904,7 +1909,6 @@ static bool isomorphism_degheuristic(const graph* the_graph, const graph* cmp_gr
     return found;
 }
 
-#define ISOMORPHISM_TEST_BENCHMARKS
 #ifdef ISOMORPHISM_TEST_BENCHMARKS
 /*
  * Check whether there exists an isomorphism between a test graph and a comparison
@@ -1926,7 +1930,6 @@ static bool isomorphism_bruteforce(const graph* the_graph, const graph* cmp_grap
     node* root;
     tree234* lifo;
 
-    LOG(("--- Starting bruteforce isomorphism test ---\n"));
     clock_t begin = clock();
     
     /* Check whether the graphs have the same number of vertices */
@@ -2052,7 +2055,7 @@ static bool isomorphism_bruteforce(const graph* the_graph, const graph* cmp_grap
 
     clock_t end = clock();
     double duration = (double) ((end - begin) * 1000) / CLOCKS_PER_SEC;
-    LOG(("--- Finished bruteforce isomorphism test\nDuration: %lf ---\n", duration));
+    printf("Finished bruteforce isomorphism test, duration: %lf\n", duration);
 
     sfree(vtcs_the);
     free_node(root, true);
