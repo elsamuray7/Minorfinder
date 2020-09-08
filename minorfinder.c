@@ -58,11 +58,6 @@ enum {
     NCOLOURS
 };
 
-enum default_params {
-    DEFAULT_N_BASE = 15,
-    DEFAULT_N_MIN = 4
-};
-
 /*
  * A grid, defines a region of a window
  */
@@ -140,7 +135,15 @@ typedef struct graph {
 
 } graph;
 
+enum game_mode {
+    NORMAL,
+    WAGNER
+};
+
 struct game_params {
+
+    /* either NORMAL or WAGNER mode */
+    enum game_mode mode;
 
     /* number of base graph points */
     int n_base;
@@ -149,6 +152,19 @@ struct game_params {
     int n_min;
 
 };
+
+const struct game_params normal_presets[] = {
+    { NORMAL, 15, 4 },
+    { NORMAL, 19, 5 },
+    { NORMAL, 23, 6 }
+};
+
+const struct game_params wagner_presets[] = {
+    { WAGNER, 19, 5 },
+    { WAGNER, 23, 6 }
+};
+
+#define DEFAULT_PRESET normal_presets[0]
 
 struct game_state {
 
@@ -168,46 +184,40 @@ static game_params *default_params(void)
 {
     game_params *ret = snew(game_params);
 
-    ret->n_base = DEFAULT_N_BASE;
-    ret->n_min = DEFAULT_N_MIN;
+    *ret = DEFAULT_PRESET;
 
     return ret;
 }
 
-static bool game_fetch_preset(int i, char **name, game_params **params)
+struct preset_menu* preset_menu(void)
 {
-    game_params* ret;
-    int n_base;
-    int n_min;
     char buf[80];
+    int i;
+    struct preset_menu* ret = preset_menu_new();
 
-    switch (i)
+    sprintf(buf, "Normal");
+    struct preset_menu* normal = preset_menu_add_submenu(ret, dupstr(buf));
+    for (i = 0; i < lenof(normal_presets); i++)
     {
-        case 0:
-            n_base = DEFAULT_N_BASE;
-            n_min = DEFAULT_N_MIN;
-            break;
-        case 1:
-            n_base = 19;
-            n_min = 5;
-            break;
-        case 2:
-            n_base = 23;
-            n_min = 6;
-            break;
-        default:
-            return false;
+        game_params* params = default_params();
+        sprintf(buf, "%d base, %d minor points", normal_presets[i].n_base,
+                normal_presets[i].n_min);
+        *params = normal_presets[i];
+        preset_menu_add_preset(normal, dupstr(buf), params);
     }
 
-    sprintf(buf, "%d base, %d minor points", n_base, n_min);
-    *name = dupstr(buf);
+    sprintf(buf, "Wagner");
+    struct preset_menu* wagner = preset_menu_add_submenu(ret, dupstr(buf));
+    for (i = 0; i < lenof(wagner_presets); i++)
+    {
+        game_params* params = default_params();
+        sprintf(buf, "%d base, %d minor points", wagner_presets[i].n_base,
+                wagner_presets[i].n_min);
+        *params = wagner_presets[i];
+        preset_menu_add_preset(wagner, dupstr(buf), params);
+    }
 
-    ret = snew(game_params);
-    ret->n_base = n_base;
-    ret->n_min = n_min;
-    *params = ret;
-    
-    return true;
+    return ret;
 }
 
 static void free_params(game_params *params)
@@ -224,32 +234,16 @@ static game_params *dup_params(const game_params *params)
 
 static void decode_params(game_params *params, char const *string)
 {
-    if (*string == 'b')
+    int mode;
+    if (sscanf(string, "%d:%d-%d", &mode, &params->n_base, &params->n_min) != 3)
     {
-        string++;
-        if (*string && isdigit((uint8) *string))
-        {
-            params->n_base = atoi(string);
-            while (*string && isdigit((uint8) *string)) string++;
-            if (*string == '-')
-            {
-                string++;
-                if (*string == 'm')
-                {
-                    string++;
-                    if (*string && isdigit((uint8) *string))
-                    {
-                        params->n_min = atoi(string);
-                        return; /* params were correctly encoded */
-                    }
-                }
-            }
-        }
+        /* params encoding was incorrect */
+        *params = DEFAULT_PRESET;
     }
-
-    /* params encoding was incorrect */
-    params->n_base = DEFAULT_N_BASE;
-    params->n_min = DEFAULT_N_MIN;
+    else
+    {
+        params->mode = mode;
+    }
 }
 
 static char *encode_params(const game_params *params, bool full)
@@ -273,10 +267,24 @@ static game_params *custom_params(const config_item *cfg)
 
 static const char *validate_params(const game_params *params, bool full)
 {
-    if (params->n_base < DEFAULT_N_BASE || params->n_base > 30)
-        return "Number of base graph points is invalid";
-    if (params->n_min < DEFAULT_N_MIN || params->n_min > 15)
-        return "Number of minor points is invalid";
+    switch (params->mode)
+    {
+        case NORMAL:
+            if (params->n_base < normal_presets[0].n_base
+                || params->n_base > normal_presets[lenof(normal_presets)-1].n_base)
+                return "Number of base graph points is invalid";
+            else if (params->n_min < normal_presets[0].n_min
+                || params->n_min > normal_presets[lenof(normal_presets)-1].n_min)
+                return "Number of minor points is invalid";
+        case WAGNER:
+            if (params->n_base < wagner_presets[0].n_base
+                || params->n_base > wagner_presets[lenof(wagner_presets)-1].n_base)
+                return "Number of base graph points is invalid";
+            else if (params->n_min < wagner_presets[0].n_min
+                || params->n_min > wagner_presets[lenof(wagner_presets)-1].n_min)
+                return "Number of minor points is invalid";
+        default:;
+    }
     
     return NULL;
 }
@@ -3215,7 +3223,7 @@ static void game_print(drawing *dr, const game_state *state, int tilesize)
 const struct game thegame = {
     "Minor Finder", "games.minorfinder", "minorfinder",
     default_params,                                                     /* done */
-    game_fetch_preset, NULL,                                            /* done */
+    NULL, preset_menu,                                            /* done */
     decode_params,                                                      /* done */
     encode_params,                                                      /* done */
     free_params,                                                        /* done */
