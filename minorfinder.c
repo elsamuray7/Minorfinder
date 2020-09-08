@@ -13,7 +13,11 @@
 #include <ctype.h>
 #include <math.h>
 
+#define BENCHMARKS
+
+#ifdef BENCHMARKS
 #include <time.h>
+#endif
 
 #include "puzzles.h"
 #include "tree234.h"
@@ -1712,8 +1716,6 @@ static int mappingcmp(void* av, void* bv)
     return mappingcmpC(av, bv);
 }
 
-#define ISOMORPHISM_TEST_BENCHMARKS
-
 /*
  * Check whether there exists an isomorphism between a test graph and a comparison
  * graph. The algorithm builds on the idea that vertices with different degree can't
@@ -1734,7 +1736,7 @@ static bool isomorphism_degheuristic(const graph* the_graph, const graph* cmp_gr
     node* root;
     tree234* lifo;
 
-#ifdef ISOMORPHISM_TEST_BENCHMARKS
+#ifdef BENCHMARKS
     clock_t begin = clock();
 #endif
     
@@ -1895,7 +1897,7 @@ static bool isomorphism_degheuristic(const graph* the_graph, const graph* cmp_gr
         }
     }
 
-#ifdef ISOMORPHISM_TEST_BENCHMARKS
+#ifdef BENCHMARKS
     clock_t end = clock();
     double duration = (double) ((end - begin) * 1000) / CLOCKS_PER_SEC;
     printf("Finished isomorphism test with degree heuristic, duration: %lf\n",
@@ -1909,7 +1911,7 @@ static bool isomorphism_degheuristic(const graph* the_graph, const graph* cmp_gr
     return found;
 }
 
-#ifdef ISOMORPHISM_TEST_BENCHMARKS
+#ifdef BENCHMARKS
 /*
  * Check whether there exists an isomorphism between a test graph and a comparison
  * graph. The algorithm is a simple bruteforce algorithm that checks for all possible
@@ -2076,6 +2078,83 @@ enum move {
     MOVE_DELEDGE = 0x8
 };
 
+/*
+ * Start from currstate and recursively check for all possible contraction sequences whether
+ * they lead to a solved state or not. If yes the method should return a non-NULL pointer to
+ * a dynamic string, otherwise it should return NULL.
+ */
+static char* solve_bruteforce(const game_state* currstate, int* movessize, int* moveslen)
+{
+#ifdef BENCHMARKS
+    bool solved;
+#endif
+    int i;
+    edge* e;
+
+    if (count234(currstate->base->vertices) > currstate->params.n_min)
+    {
+        LOG(("Bruteforce solver - Base graph has more vertices than minor graph left\n"));
+        for (i = 0; (e = index234(currstate->base->edges, i)) != NULL; i++)
+        {
+            char* moves;
+            game_state* nextstate = dup_game(currstate);
+            contract_edge(nextstate->base, e->src, e->tgt);
+            LOG(("Bruteforce solver - Contracted edge %d-%d\n", e->src, e->tgt));
+            if ((moves = solve_bruteforce(nextstate, movessize, moveslen)))
+            {
+                char buf[80];
+                char* oldmoves = NULL;
+                int movesoff;
+                free_game(nextstate);
+                LOG(("Bruteforce solver - Current moveslen: %d, current movessize: %d\n", *moveslen, *movessize));
+                LOG(("Bruteforce solver - First character pointed to by moves, should be 'S': %c\n", *moves));
+                LOG(("Bruteforce solver - Encode last contraction %d-%d\n", e->src, e->tgt));
+                /*
+                 * Since we start encoding the very last move first, we always have to put
+                 * subsequent move encodings in front of the previous encodings. This should
+                 * ensure that our moves happen to be in the correct order when the most outter
+                 * recursive call returns.
+                 */
+                if (*moveslen > 1)
+                {
+                    oldmoves = dupstr(moves+1);
+                    LOG(("Bruteforce solver - oldmoves: %s\n", oldmoves));
+                }
+                movesoff = sprintf(buf, "%d:%d-%d;", MOVE_CONTREDGE, e->src, e->tgt);
+                if ((*moveslen) + movesoff >= *movessize)
+                {
+                    *movessize = (*moveslen) + movesoff + 256;
+                    moves = sresize(moves, *movessize, char);
+                }
+                strcpy(moves+1, buf);
+                if (oldmoves)
+                    strcpy(moves + movesoff + 1, oldmoves);
+                LOG(("Bruteforce solver - newmoves: %s\n", moves));
+                (*moveslen) += movesoff;
+                return moves;
+            }
+
+            free_game(nextstate);
+        }  
+    }
+#ifdef BENCHMARKS
+    else if ((solved = isomorphism_degheuristic(currstate->minor, currstate->base)))
+    {
+        assert(solved == isomorphism_bruteforce(currstate->minor, currstate->base));
+#else
+    else if (isomorphism_degheuristic(currstate->minor, currstate->base))
+    {
+#endif
+        LOG(("Bruteforce solver - Found solution\n"));
+        char* moves = snewn(*movessize, char);
+        *moves = 'S';
+        *moveslen = 1;
+        return moves;
+    }
+    
+    return NULL;
+}
+
 #ifdef SHARE_ADJACENT_VERTEX_HEURISTIC
 /*
  * Check whether two vertices from different subgraphs are adjacent to the same
@@ -2095,6 +2174,7 @@ static bool share_adjacent_vertex(const game_state* state, int vxa, int vxb, int
     return false;
 }
 #endif
+
 #ifdef REPRESENT_MINOR_EDGE_HEURISTIC
 /*
  * Check whether two adjacent vertices from different subgraphs represent an
@@ -2106,7 +2186,9 @@ static bool represent_minor_edge(const game_state* state, int vxa, int vxb, int 
     return isedge(state->minor->edges, vxa / n1, vxb / n1);
 }
 #endif
+
 #define EDGE_COUNT_DIFFERENCE_HEURISTIC
+
 #ifdef EDGE_COUNT_DIFFERENCE_HEURISTIC
 static int edge_count_difference(const game_state* state, int vxa, int vxb)
 {
@@ -2305,11 +2387,19 @@ static char *solve_game(const game_state *state, const game_state *currstate,
      */
     if (!(solved->solved = isomorphism_degheuristic(solved->minor, solved->base)))
     {
-#ifdef ISOMORPHISM_TEST_BENCHMARKS
+#ifdef BENCHMARKS
         assert(solved->solved == isomorphism_bruteforce(solved->minor, solved->base));
 #endif
+        char* moves;
+        int movessize = 256;
+        int moveslen = 0;
         sfree(ret);
         free_game(solved);
+        if ((moves = solve_bruteforce(currstate, &movessize, &moveslen)))
+        {
+            LOG(("Used bruteforce solver to solve puzzle\n"));
+            return moves;
+        }
         *error = "Solution not known for the current puzzle state";
         return NULL;
     }
