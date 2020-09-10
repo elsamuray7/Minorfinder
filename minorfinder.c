@@ -19,7 +19,7 @@
 #include "tree234.h"
 
 /* debug mode */
-#define DEBUG true
+#define DEBUG false
 
 #define BENCHMARKS
 
@@ -618,7 +618,7 @@ static bool crosspoint(point s, point t, point p)
  */
 static void addedges(tree234* edges, vertex* vertices, point* points, const int __off_src_vtcs,
                     const int __n_src_vtcs, const int __off_tgt_vtcs, const int __n_tgt_vtcs,
-                    const int n_pts, const int __max_deg, bool can_cross, random_state* rs)
+                    const int n_pts, const int __max_deg, random_state* rs)
 {
     bool* contains;
     int i;
@@ -720,24 +720,21 @@ static void addedges(tree234* edges, vertex* vertices, point* points, const int 
             continue;
         }
         /* check for crossing edges */
-        if (!can_cross)
+        for (i = 0; (e = index234(edges, i)) != NULL; i++)
         {
-            for (i = 0; (e = index234(edges, i)) != NULL; i++)
+            if (vxa->idx == e->src || vxa->idx == e->tgt || vxb->idx == e->src ||
+                vxb->idx == e->tgt)
             {
-                if (vxa->idx == e->src || vxa->idx == e->tgt || vxb->idx == e->src ||
-                    vxb->idx == e->tgt)
-                {
-                    continue;
-                }
-                else if (cross(points[vxa->idx], points[vxb->idx], points[e->src],
-                                points[e->tgt]))
-                {
-                    del234(vtcs, vxb);
-                    LOG(("Removed vertex %d from target vertices of vertex %d,"\
-                        " the edge crosses the edge %d-%d\n", vxb->idx, vxa->idx,
-                        e->src, e->tgt));
-                    goto next_vertices; /* this edge crosses another edge => next vertex pair */
-                }
+                continue;
+            }
+            else if (cross(points[vxa->idx], points[vxb->idx], points[e->src],
+                            points[e->tgt]))
+            {
+                del234(vtcs, vxb);
+                LOG(("Removed vertex %d from target vertices of vertex %d,"\
+                    " the edge crosses the edge %d-%d\n", vxb->idx, vxa->idx,
+                    e->src, e->tgt));
+                goto next_vertices; /* this edge crosses another edge => next vertex pair */
             }
         }
         /* check for crossing points */
@@ -810,8 +807,7 @@ static void addedges(tree234* edges, vertex* vertices, point* points, const int 
 #define COORDUNIT 24
 
 #define MINORRADIUS(n) ((4 * (n)) / 11)
-#define SUBGRAPH_DISTANCE (4 * POINTRADIUS)
-#define SUBGRAPH_POINTENTROPY 3
+#define SUBGRAPH_DISTANCE (6 * POINTRADIUS)
 #define OVERLAYPOINT_TRESHOLD square(4 * POINTRADIUS)
 
 static char *new_game_desc(const game_params *params, random_state *rs,
@@ -830,8 +826,6 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     long* coords_x;
     long* coords_y;
     long* radii;
-
-    double* angles;
 
     point* pt;
     point* pts_min;
@@ -876,8 +870,7 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     switch (params->mode)
     {
         case NORMAL:
-            addedges(edges_min_234, vtcs_min, pts_min, 0, n_min, 0, -1, n_min, -1,
-                    false, rs);
+            addedges(edges_min_234, vtcs_min, pts_min, 0, n_min, 0, -1, n_min, -1, rs);
             break;
         case WAGNER:
             switch (n_min) {
@@ -931,21 +924,17 @@ static char *new_game_desc(const game_params *params, random_state *rs,
      * Assign coordinates to the subgraphs. The coordinates must lie in the previously
      * calculated subgraph areas.
      */
-    tmp = SUBGRAPH_POINTENTROPY * n_sub;
-    angles = snewn(tmp, double);
-    for (i = 0; i < tmp; i++)
-    {
-        angles[i] = ((double) i * 2.0 * PI) / (double) tmp;
-    }
     pts_base = snewn(n_base, point);
     for (i = 0; i < n_min; i++)
     {
-        shuffle(angles, tmp, sizeof(double), rs);
+        double rotation = (double) random_upto(rs, (100.0 * 2.0 * PI)
+                            / (double) n_sub) / 100.0;
         for (j = 0; j < n_sub; j++)
         {
+            double angle = ((double) j * 2.0 * PI) / (double) n_sub;
             pt = pts_base + (i * n_sub) + j;
-            pt->x = (double) pts_min[i].x + ((double) radii[i] * sin(angles[j]));
-            pt->y = (double) pts_min[i].y + ((double) radii[i] * cos(angles[j]));
+            pt->x = (double) pts_min[i].x + ((double) radii[i] * sin(angle + rotation));
+            pt->y = (double) pts_min[i].y + ((double) radii[i] * cos(angle + rotation));
             pt->d = 1;
             LOG(("Assigned coordinates x:%ld, y:%ld and denominator %ld to subgraph"\
                 " point %ld of subgraph %ld (base graph point %ld)\n", pt->x, pt->y, pt->d,
@@ -953,7 +942,6 @@ static char *new_game_desc(const game_params *params, random_state *rs,
         }
     }
     sfree(radii);
-    sfree(angles);
 
     /* Add edges to the subgraphs */
     vtcs_base = snewn(n_base, vertex);
@@ -967,7 +955,7 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     for (i = 0; i < n_min; i++)
     {
         addedges(edges_base_234, vtcs_base, pts_base,  i * n_sub, n_sub, i * n_sub, -1,
-                n_min * n_sub, -1, false, rs);
+                n_min * n_sub, -1, rs);
     }
 
     /*
@@ -997,15 +985,18 @@ static char *new_game_desc(const game_params *params, random_state *rs,
             for (k = 0; k < n_sub; k++)
             {
                 beste.tgt = ((vertex*) index234(vtcs_tgt, k))->idx;
-                /* check for crossing edges */
-                for (l = 0; (_e = index234(edges_base_234, l)) != NULL; l++)
+                if (params->mode == NORMAL)
                 {
-                    if (_e->src == beste.src || _e->tgt == beste.src
-                        || _e->src == beste.tgt || _e->tgt == beste.tgt)
-                        continue;
-                    else if (cross(pts_base[beste.src], pts_base[beste.tgt],
-                                    pts_base[_e->src], pts_base[_e->tgt]))
-                        goto next_tgt; /* this edge crosses another edge => next target */
+                    /* check for crossing edges */
+                    for (l = 0; (_e = index234(edges_base_234, l)) != NULL; l++)
+                    {
+                        if (_e->src == beste.src || _e->tgt == beste.src
+                            || _e->src == beste.tgt || _e->tgt == beste.tgt)
+                            continue;
+                        else if (cross(pts_base[beste.src], pts_base[beste.tgt],
+                                        pts_base[_e->src], pts_base[_e->tgt]))
+                            goto next_tgt; /* this edge crosses another edge => next target */
+                    }
                 }
                 /* check for crossing points */
                 for (l = 0; l < n_min * n_sub; l++)
@@ -1099,12 +1090,44 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     switch (params->mode)
     {
         case NORMAL:
-            addedges(edges_base_234, vtcs_base, pts_base, 0, n_base, n_min * n_sub, -1, n_base, -1,
-                    false, rs);
+            addedges(edges_base_234, vtcs_base, pts_base, 0, n_base, n_min * n_sub, -1, n_base, -1, rs);
             break;
         case WAGNER:
-            addedges(edges_base_234, vtcs_base, pts_base, 0, n_base, n_min * n_sub, -1, n_base, n_min / 2,
-                    true, rs);
+            for (i = n_min * n_sub; i < n_base; i++)
+            {
+                long best_sqdists[3];
+                edge bestes[3];
+                best_sqdists[0] = best_sqdists[1] = best_sqdists[2] = square(coord_lim * COORDUNIT);
+                bestes[0].tgt = bestes[1].tgt = bestes[2].tgt = i;
+                for (j = 0; j < n_base; j++)
+                {
+                    if (j == i)
+                    {
+                        break;
+                    }
+                    else
+                    {
+                        long sqdist = square(pts_base[j].x - pts_base[i].x)
+                                        + square(pts_base[j].y - pts_base[i].y);
+                    
+                        for (k = 0; k < 3; k++)
+                        {
+                            if (sqdist < best_sqdists[k])
+                            {
+                                best_sqdists[k] = sqdist;
+                                bestes[k].src = j;
+                                break;
+                            }
+                        }
+                    }
+                }
+                for (j = 0; j < 3; j++)
+                {
+                    addedge(edges_base_234, bestes[j].src, bestes[j].tgt);
+                    vtcs_base[bestes[j].src].deg++;
+                    vtcs_base[bestes[j].tgt].deg++;
+                }
+            }
             break;
         default:;
     }
@@ -3389,7 +3412,7 @@ static void game_print(drawing *dr, const game_state *state, int tilesize)
 const struct game thegame = {
     "Minor Finder", "games.minorfinder", "minorfinder",
     default_params,                                                     /* done */
-    NULL, preset_menu,                                            /* done */
+    NULL, preset_menu,                                                  /* done */
     decode_params,                                                      /* done */
     encode_params,                                                      /* done */
     free_params,                                                        /* done */
