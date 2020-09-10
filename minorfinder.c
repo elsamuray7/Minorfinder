@@ -13,17 +13,15 @@
 #include <ctype.h>
 #include <math.h>
 
-#define BENCHMARKS
-
-#ifdef BENCHMARKS
 #include <time.h>
-#endif
 
 #include "puzzles.h"
 #include "tree234.h"
 
 /* debug mode */
 #define DEBUG true
+
+#define BENCHMARKS
 
 /* enable or disable console log */
 #if DEBUG
@@ -1899,7 +1897,7 @@ static bool isomorphism_degheuristic(const graph* the_graph, const graph* cmp_gr
 
 #ifdef BENCHMARKS
     clock_t end = clock();
-    double duration = (double) ((end - begin) * 1000) / CLOCKS_PER_SEC;
+    double duration = ((double) (end - begin) * 1000.0) / CLOCKS_PER_SEC;
     printf("Finished isomorphism test with degree heuristic, duration: %lf\n",
         duration);
 #endif
@@ -2056,7 +2054,7 @@ static bool isomorphism_bruteforce(const graph* the_graph, const graph* cmp_grap
     }
 
     clock_t end = clock();
-    double duration = (double) ((end - begin) * 1000) / CLOCKS_PER_SEC;
+    double duration = ((double) (end - begin) * 1000.0) / CLOCKS_PER_SEC;
     printf("Finished bruteforce isomorphism test, duration: %lf\n", duration);
 
     sfree(vtcs_the);
@@ -2081,15 +2079,20 @@ enum move {
 /*
  * Start from currstate and recursively check for all possible contraction sequences whether
  * they lead to a solved state or not. If yes the method should return a non-NULL pointer to
- * a dynamic string, otherwise it should return NULL.
+ * a dynamic string, otherwise it should return NULL. If the algorithm runs longer than time-
+ * out milliseconds without finding a solution it will return NULL either.
  */
-static char* solve_bruteforce(const game_state* currstate, int* movessize, int* moveslen)
+static char* solve_bruteforce(const game_state* currstate, game_state** solvedstate,
+                                int* movessize, int* moveslen, clock_t begin, int timeout)
 {
 #ifdef BENCHMARKS
     bool solved;
 #endif
     int i;
     edge* e;
+
+    if (((double) (clock() - begin) * 1000.0) / CLOCKS_PER_SEC > timeout)
+        return NULL;
 
     if (count234(currstate->base->vertices) > currstate->params.n_min)
     {
@@ -2100,7 +2103,7 @@ static char* solve_bruteforce(const game_state* currstate, int* movessize, int* 
             game_state* nextstate = dup_game(currstate);
             contract_edge(nextstate->base, e->src, e->tgt);
             LOG(("Bruteforce solver - Contracted edge %d-%d\n", e->src, e->tgt));
-            if ((moves = solve_bruteforce(nextstate, movessize, moveslen)))
+            if ((moves = solve_bruteforce(nextstate, solvedstate, movessize, moveslen, begin, timeout)))
             {
                 char buf[80];
                 char* oldmoves = NULL;
@@ -2140,15 +2143,18 @@ static char* solve_bruteforce(const game_state* currstate, int* movessize, int* 
 #ifdef BENCHMARKS
     else if ((solved = isomorphism_degheuristic(currstate->minor, currstate->base)))
     {
-        assert(solved == isomorphism_bruteforce(currstate->minor, currstate->base));
 #else
     else if (isomorphism_degheuristic(currstate->minor, currstate->base))
     {
 #endif
         LOG(("Bruteforce solver - Found solution\n"));
         char* moves = snewn(*movessize, char);
+#ifdef BENCHMARKS
+        assert(solved == isomorphism_bruteforce(currstate->minor, currstate->base));
+#endif
         *moves = 'S';
         *moveslen = 1;
+        *solvedstate = dup_game(currstate);
         return moves;
     }
     
@@ -2219,6 +2225,7 @@ static char *solve_game(const game_state *state, const game_state *currstate,
     int i, j;
     int tmp;
 
+    point* pt;
     vertex* vx;
     edge* e;
     tree234* eaten_vtcs;
@@ -2390,15 +2397,38 @@ static char *solve_game(const game_state *state, const game_state *currstate,
 #ifdef BENCHMARKS
         assert(solved->solved == isomorphism_bruteforce(solved->minor, solved->base));
 #endif
-        char* moves;
-        int movessize = 256;
-        int moveslen = 0;
         sfree(ret);
+        ret = NULL;
         free_game(solved);
-        if ((moves = solve_bruteforce(currstate, &movessize, &moveslen)))
+        solved = NULL;
+        retsize = 256;
+        retlen = 0;
+        clock_t begin = clock();
+        if ((ret = solve_bruteforce(currstate, &solved, &retsize, &retlen, begin, 100)))
         {
+            long coord_lim = COORDLIMIT(currstate->params.n_base);
+            long circle_rad = MINORRADIUS(currstate->params.n_base);
+            tmp = coord_lim - (2 * COORDMARGIN);
             LOG(("Used bruteforce solver to solve puzzle\n"));
-            return moves;
+            for (i = 0; (vx = index234(solved->base->vertices, i)) != NULL; i++)
+            {
+                double angle = ((double) i * 2.0 * PI) / (double) n_min;
+                pt = solved->base->points + vx->idx;
+                pt->x = (((double) tmp / 2.0) + ((double) circle_rad * sin(angle)) + COORDMARGIN)
+                        * COORDUNIT;
+                pt->y = (((double) tmp / 2.0) + ((double) circle_rad * cos(angle)) + COORDMARGIN)
+                        * COORDUNIT;
+                pt->d = 1;
+                retoff = sprintf(buf, "%d:%d-%ld-%ld;", MOVE_DRAGPOINT, vx->idx, pt->x, pt->y);
+                if (retlen + retoff >= retsize)
+                {
+                    retsize = retlen + retoff + 256;
+                    ret = sresize(ret, retsize, char);
+                }
+                strcpy(ret + retlen, buf);
+                retlen += retoff;
+            }
+            return ret;
         }
         *error = "Solution not known for the current puzzle state";
         return NULL;
@@ -2902,7 +2932,7 @@ static game_state *execute_move(const game_state *state, const char *move)
         if (!(current_move == MOVE_DRAGPOINT || state->solved || ret->solved))
         {
             ret->solved = isomorphism_degheuristic(ret->minor, ret->base);
-#ifdef ISOMORPHISM_TEST_BENCHMARKS
+#ifdef BENCHMARKS
             assert(ret->solved == isomorphism_bruteforce(ret->minor, ret->base));
 #endif
         }
