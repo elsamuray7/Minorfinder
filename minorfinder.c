@@ -200,9 +200,8 @@ struct preset_menu* preset_menu(void)
     for (i = 0; i < lenof(normal_presets); i++)
     {
         game_params* params = default_params();
-        sprintf(buf, "%d base, %d minor points", normal_presets[i].n_base,
-                normal_presets[i].n_min);
         *params = normal_presets[i];
+        sprintf(buf, "%d base, %d minor points", params->n_base, params->n_min);
         preset_menu_add_preset(normal, dupstr(buf), params);
     }
 
@@ -211,9 +210,8 @@ struct preset_menu* preset_menu(void)
     for (i = 0; i < lenof(wagner_presets); i++)
     {
         game_params* params = default_params();
-        sprintf(buf, "%d base, %d minor points", wagner_presets[i].n_base,
-                wagner_presets[i].n_min);
         *params = wagner_presets[i];
+        sprintf(buf, "%d base, %d minor points", params->n_base, params->n_min);
         preset_menu_add_preset(wagner, dupstr(buf), params);
     }
 
@@ -250,7 +248,7 @@ static char *encode_params(const game_params *params, bool full)
 {
     char buf[80];
 
-    sprintf(buf, "b%d-m%d", params->n_base, params->n_min);
+    sprintf(buf, "%d:%d-%d", params->mode, params->n_base, params->n_min);
     
     return dupstr(buf);
 }
@@ -276,6 +274,7 @@ static const char *validate_params(const game_params *params, bool full)
             else if (params->n_min < normal_presets[0].n_min
                 || params->n_min > normal_presets[lenof(normal_presets)-1].n_min)
                 return "Number of minor points is invalid";
+            break;
         case WAGNER:
             if (params->n_base < wagner_presets[0].n_base
                 || params->n_base > wagner_presets[lenof(wagner_presets)-1].n_base)
@@ -283,6 +282,7 @@ static const char *validate_params(const game_params *params, bool full)
             else if (params->n_min < wagner_presets[0].n_min
                 || params->n_min > wagner_presets[lenof(wagner_presets)-1].n_min)
                 return "Number of minor points is invalid";
+            break;
         default:;
     }
     
@@ -616,7 +616,7 @@ static bool crosspoint(point s, point t, point p)
  */
 static void addedges(tree234* edges, vertex* vertices, point* points, const int __off_src_vtcs,
                     const int __n_src_vtcs, const int __off_tgt_vtcs, const int __n_tgt_vtcs,
-                    const int n_pts, const int __max_deg, random_state* rs)
+                    const int n_pts, const int __max_deg, bool can_cross, random_state* rs)
 {
     bool* contains;
     int i;
@@ -718,21 +718,24 @@ static void addedges(tree234* edges, vertex* vertices, point* points, const int 
             continue;
         }
         /* check for crossing edges */
-        for (i = 0; (e = index234(edges, i)) != NULL; i++)
+        if (!can_cross)
         {
-            if (vxa->idx == e->src || vxa->idx == e->tgt || vxb->idx == e->src ||
-                vxb->idx == e->tgt)
+            for (i = 0; (e = index234(edges, i)) != NULL; i++)
             {
-                continue;
-            }
-            else if (cross(points[vxa->idx], points[vxb->idx], points[e->src],
-                            points[e->tgt]))
-            {
-                del234(vtcs, vxb);
-                LOG(("Removed vertex %d from target vertices of vertex %d,"\
-                    " the edge crosses the edge %d-%d\n", vxb->idx, vxa->idx,
-                    e->src, e->tgt));
-                goto next_vertices; /* this edge crosses another edge => next vertex pair */
+                if (vxa->idx == e->src || vxa->idx == e->tgt || vxb->idx == e->src ||
+                    vxb->idx == e->tgt)
+                {
+                    continue;
+                }
+                else if (cross(points[vxa->idx], points[vxb->idx], points[e->src],
+                                points[e->tgt]))
+                {
+                    del234(vtcs, vxb);
+                    LOG(("Removed vertex %d from target vertices of vertex %d,"\
+                        " the edge crosses the edge %d-%d\n", vxb->idx, vxa->idx,
+                        e->src, e->tgt));
+                    goto next_vertices; /* this edge crosses another edge => next vertex pair */
+                }
             }
         }
         /* check for crossing points */
@@ -868,7 +871,39 @@ static char *new_game_desc(const game_params *params, random_state *rs,
         vx->deg = 0;
     }
     edges_min_234 = newtree234(edgecmp);
-    addedges(edges_min_234, vtcs_min, pts_min, 0, n_min, 0, -1, n_min, -1, rs);
+    switch (params->mode)
+    {
+        case NORMAL:
+            addedges(edges_min_234, vtcs_min, pts_min, 0, n_min, 0, -1, n_min, -1,
+                    false, rs);
+            break;
+        case WAGNER:
+            switch (n_min) {
+                /* make K_5 */
+                case 5:
+                    for (i = 0; i < n_min - 1; i++)
+                    {
+                        for (j = i + 1; j < n_min; j++)
+                        {
+                            addedge(edges_min_234, i, j);
+                            vtcs_min[i].deg++;
+                            vtcs_min[j].deg++;
+                        }
+                    }
+                    break;
+                /* make K_33 */
+                case 6:
+                    for (i = 0; i < n_min / 2; i++)
+                    {
+                        for (j = n_min / 2; j < n_min; j++)
+                        {
+                            addedge(edges_min_234, i, j);
+                            vtcs_min[i].deg++;
+                            vtcs_min[j].deg++;
+                        }
+                    }
+            }
+    }
 
     /*
      * To create the orginal graph we need to replace all minor points by subgraphs.
@@ -930,7 +965,7 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     for (i = 0; i < n_min; i++)
     {
         addedges(edges_base_234, vtcs_base, pts_base,  i * n_sub, n_sub, i * n_sub, -1,
-                n_min * n_sub, -1, rs);
+                n_min * n_sub, -1, false, rs);
     }
 
     /*
@@ -1059,7 +1094,18 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     sfree(coords_y);
 
     /* Add edges to the remaining points */
-    addedges(edges_base_234, vtcs_base, pts_base, 0, n_base, n_min * n_sub, -1, n_base, -1, rs);
+    switch (params->mode)
+    {
+        case NORMAL:
+            addedges(edges_base_234, vtcs_base, pts_base, 0, n_base, n_min * n_sub, -1, n_base, -1,
+                    false, rs);
+            break;
+        case WAGNER:
+            addedges(edges_base_234, vtcs_base, pts_base, 0, n_base, n_min * n_sub, -1, n_base, n_min / 2,
+                    true, rs);
+            break;
+        default:;
+    }
 
 #if DEBUG
     for (i = n_min * n_sub; i < n_base; i++)
