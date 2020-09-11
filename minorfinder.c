@@ -19,7 +19,7 @@
 #include "tree234.h"
 
 /* debug mode */
-#define DEBUG false
+#define DEBUG true
 
 #define BENCHMARKS
 
@@ -213,7 +213,16 @@ struct preset_menu* preset_menu(void)
     {
         game_params* params = default_params();
         *params = wagner_presets[i];
-        sprintf(buf, "%d base, %d minor points", params->n_base, params->n_min);
+        switch (params->n_min)
+        {
+            case 5:
+                sprintf(buf, "K_5");
+                break;
+            case 6:
+                sprintf(buf, "K_3,3");
+                break;
+            default:;
+        }
         preset_menu_add_preset(wagner, dupstr(buf), params);
     }
 
@@ -799,6 +808,48 @@ static void addedges(tree234* edges, vertex* vertices, point* points, const int 
 }
 
 /*
+ * Add edges to a graph with 5 vertices such that it becomes the K_5
+ */
+static void make_K_5(tree234* edges, vertex* vertices, int n)
+{
+    int i, j;
+
+#if DEBUG
+    assert(n == 5);
+#endif
+    for (i = 0; i < n - 1; i++)
+    {
+        for (j = i + 1; j < n; j++)
+        {
+            addedge(edges, i, j);
+            vertices[i].deg++;
+            vertices[j].deg++;
+        }
+    }
+}
+
+/*
+ * Add edges to a graph with 6 vertices such that it becomes the K_33
+ */
+static void make_K_33(tree234* edges, vertex* vertices, int n)
+{
+    int i, j;
+
+#if DEBUG
+    assert(n == 6);
+#endif
+    for (i = 0; i < n / 2; i++)
+    {
+        for (j = n / 2; j < n; j++)
+        {
+            addedge(edges, i, j);
+            vertices[i].deg++;
+            vertices[j].deg++;
+        }
+    }
+}
+
+/*
  * These parameters are highly sensitive, changing them may cause problems when
  * generating new game descriptions.
  */
@@ -808,6 +859,7 @@ static void addedges(tree234* edges, vertex* vertices, point* points, const int 
 
 #define MINORRADIUS(n) ((4 * (n)) / 11)
 #define SUBGRAPH_DISTANCE (6 * POINTRADIUS)
+#define SUBGRAPH_POINTENTROPY 2
 #define OVERLAYPOINT_TRESHOLD square(4 * POINTRADIUS)
 
 static char *new_game_desc(const game_params *params, random_state *rs,
@@ -826,6 +878,8 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     long* coords_x;
     long* coords_y;
     long* radii;
+    
+    double* angles;
 
     point* pt;
     point* pts_min;
@@ -876,28 +930,16 @@ static char *new_game_desc(const game_params *params, random_state *rs,
             switch (n_min) {
                 /* make K_5 */
                 case 5:
-                    for (i = 0; i < n_min - 1; i++)
-                    {
-                        for (j = i + 1; j < n_min; j++)
-                        {
-                            addedge(edges_min_234, i, j);
-                            vtcs_min[i].deg++;
-                            vtcs_min[j].deg++;
-                        }
-                    }
+                    make_K_5(edges_min_234, vtcs_min, n_min);
                     break;
                 /* make K_33 */
                 case 6:
-                    for (i = 0; i < n_min / 2; i++)
-                    {
-                        for (j = n_min / 2; j < n_min; j++)
-                        {
-                            addedge(edges_min_234, i, j);
-                            vtcs_min[i].deg++;
-                            vtcs_min[j].deg++;
-                        }
-                    }
+                    make_K_33(edges_min_234, vtcs_min, n_min);
+                    break;
+                default:;
             }
+            break;
+        default:;
     }
 
     /*
@@ -924,17 +966,23 @@ static char *new_game_desc(const game_params *params, random_state *rs,
      * Assign coordinates to the subgraphs. The coordinates must lie in the previously
      * calculated subgraph areas.
      */
+    tmp = n_sub * SUBGRAPH_POINTENTROPY;
+    angles = snewn(tmp, double);
+    for (i = 0; i < tmp; i++)
+    {
+        angles[i] = ((double) i * 2.0 * PI) / (double) tmp;
+    }
     pts_base = snewn(n_base, point);
     for (i = 0; i < n_min; i++)
     {
         double rotation = (double) random_upto(rs, (100.0 * 2.0 * PI)
                             / (double) n_sub) / 100.0;
+        shuffle(angles, tmp, sizeof(double), rs);
         for (j = 0; j < n_sub; j++)
         {
-            double angle = ((double) j * 2.0 * PI) / (double) n_sub;
             pt = pts_base + (i * n_sub) + j;
-            pt->x = (double) pts_min[i].x + ((double) radii[i] * sin(angle + rotation));
-            pt->y = (double) pts_min[i].y + ((double) radii[i] * cos(angle + rotation));
+            pt->x = (double) pts_min[i].x + ((double) radii[i] * sin(angles[j] + rotation));
+            pt->y = (double) pts_min[i].y + ((double) radii[i] * cos(angles[j] + rotation));
             pt->d = 1;
             LOG(("Assigned coordinates x:%ld, y:%ld and denominator %ld to subgraph"\
                 " point %ld of subgraph %ld (base graph point %ld)\n", pt->x, pt->y, pt->d,
@@ -942,6 +990,7 @@ static char *new_game_desc(const game_params *params, random_state *rs,
         }
     }
     sfree(radii);
+    sfree(angles);
 
     /* Add edges to the subgraphs */
     vtcs_base = snewn(n_base, vertex);
@@ -1092,38 +1141,70 @@ static char *new_game_desc(const game_params *params, random_state *rs,
         case NORMAL:
             addedges(edges_base_234, vtcs_base, pts_base, 0, n_base, n_min * n_sub, -1, n_base, -1, rs);
             break;
+        /*
+         * Avoid edges across the whole grid since that makes the graph too unclear.
+         * Instead for every remaining point only add edges to the three points with
+         * the shortest distance to it.
+         */
         case WAGNER:
             for (i = n_min * n_sub; i < n_base; i++)
             {
+                int found = -1;
                 long best_sqdists[3];
                 edge bestes[3];
                 best_sqdists[0] = best_sqdists[1] = best_sqdists[2] = square(coord_lim * COORDUNIT);
                 bestes[0].tgt = bestes[1].tgt = bestes[2].tgt = i;
-                for (j = 0; j < n_base; j++)
+                for (j = 0; j < i; j++)
                 {
+                    bool cross = false;
                     if (j == i)
                     {
-                        break;
+                        continue;
                     }
-                    else
+                    /* check for crossing points */
+                    for (k = 0; k < n_base; k++)
+                    {
+                        if (k == i || k == j)
+                        {
+                            continue;
+                        }
+                        else if (crosspoint(pts_base[j], pts_base[i], pts_base[k]))
+                        {
+                            cross = true;
+                            break;
+                        }
+                    }
+                    if (!cross)
                     {
                         long sqdist = square(pts_base[j].x - pts_base[i].x)
                                         + square(pts_base[j].y - pts_base[i].y);
-                    
                         for (k = 0; k < 3; k++)
                         {
                             if (sqdist < best_sqdists[k])
                             {
+                                if (found < 2) found++;
+                                for (l = found; l > k; l--)
+                                {
+                                    best_sqdists[l] = best_sqdists[l-1];
+                                    bestes[l].src = bestes[l-1].src;
+                                }
                                 best_sqdists[k] = sqdist;
                                 bestes[k].src = j;
+                                for (l = 0; l <= found; l++)
+                                {
+                                    LOG(("%ld-st/nd/th shortest edge is %d-%d\n", l, bestes[l].src, bestes[l].tgt));
+                                }
                                 break;
                             }
                         }
                     }
                 }
-                for (j = 0; j < 3; j++)
+                for (j = 0; j <= found; j++)
                 {
                     addedge(edges_base_234, bestes[j].src, bestes[j].tgt);
+#if DEBUG
+                    assert(find234(edges_base_234, bestes + j, NULL));
+#endif
                     vtcs_base[bestes[j].src].deg++;
                     vtcs_base[bestes[j].tgt].deg++;
                 }
