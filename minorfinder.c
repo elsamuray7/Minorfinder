@@ -19,7 +19,7 @@
 #include "tree234.h"
 
 /* debug mode */
-#define DEBUG true
+#define DEBUG false
 
 #define BENCHMARKS
 
@@ -2313,8 +2313,8 @@ static char* solve_bruteforce(const game_state* currstate, game_state** solvedst
     }
     else if (isomorphism_degheuristic(currstate->minor, currstate->base, solution))
     {
-        LOG(("Bruteforce solver - Found solution\n"));
         char* moves = snewn(*movessize, char);
+        LOG(("Bruteforce solver - Found solution\n"));
 #ifdef BENCHMARKS
         assert(isomorphism_bruteforce(currstate->minor, currstate->base));
 #endif
@@ -2553,10 +2553,6 @@ static char *solve_game(const game_state *state, const game_state *currstate,
      * Check whether the found solution is valid. Doing it at this point may not be optimal
      * performance wise but we can ensure that if we are able to find a solution we will
      * always find it.
-     * 
-     * TODO:
-     * Implement another algorithm that can detect minors without any knowledge about the
-     * subgraphs.
      */
     if (!(solved->solved = isomorphism_degheuristic(solved->minor, solved->base, NULL)))
     {
