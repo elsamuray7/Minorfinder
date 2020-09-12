@@ -1867,6 +1867,18 @@ static int mappingcmpC(const void* av, const void* bv)
     else return 0;
 }
 
+/*
+ * Copy a single mapping
+ */
+static void* mappingcpy(void* state, void* elem)
+{
+    mapping* m = (mapping*) elem;
+    mapping* mcpy = snew(mapping);
+    *mcpy = *m;
+    
+    return (void*) mcpy;
+}
+
 static int mappingcmp(void* av, void* bv)
 {
     return mappingcmpC(av, bv);
@@ -1877,7 +1889,8 @@ static int mappingcmp(void* av, void* bv)
  * graph. The algorithm builds on the idea that vertices with different degree can't
  * be a vertex pair of a permutation that is an isomorphism between two graphs.
  */
-static bool isomorphism_degheuristic(const graph* the_graph, const graph* cmp_graph)
+static bool isomorphism_degheuristic(const graph* the_graph, const graph* cmp_graph,
+                                    tree234** solution)
 {
     bool found;
     int i, j;
@@ -2023,22 +2036,25 @@ static bool isomorphism_degheuristic(const graph* the_graph, const graph* cmp_gr
                 msrc.key = e->src;
                 mtgt.key = e->tgt;
                 msrc.value = mtgt.value = -1;
-                msrc.value = ((mapping*) find234(map, &msrc, mappingcmp))->value;
-                mtgt.value = ((mapping*) find234(map, &mtgt, mappingcmp))->value;
+                msrc.value = ((mapping*) find234(map, &msrc, NULL))->value;
+                mtgt.value = ((mapping*) find234(map, &mtgt, NULL))->value;
                 if (!isedge(the_graph->edges, msrc.value, mtgt.value))
                 {
                     found = false;
                     LOG(("Permutation is no isomorphism between the graphs,\n"\
                         " missing edge %d-%d in the test graph\n", msrc.value,
                         mtgt.value));
+                    sfree(mappings);
+                    freetree234(map);
                     break;
                 }
             }
-            sfree(mappings);
-            freetree234(map);
             if (found)
             {
+                if (solution) *solution = copytree234(map, mappingcpy, NULL);
                 LOG(("Permutation is an isomorphism between the graphs\n"));
+                sfree(mappings);
+                freetree234(map);
                 break;
             }
         }
@@ -2181,8 +2197,8 @@ static bool isomorphism_bruteforce(const graph* the_graph, const graph* cmp_grap
                 msrc.key = e->src;
                 mtgt.key = e->tgt;
                 msrc.value = mtgt.value = -1;
-                msrc.value = ((mapping*) find234(map, &msrc, mappingcmp))->value;
-                mtgt.value = ((mapping*) find234(map, &mtgt, mappingcmp))->value;
+                msrc.value = ((mapping*) find234(map, &msrc, NULL))->value;
+                mtgt.value = ((mapping*) find234(map, &mtgt, NULL))->value;
                 if (!isedge(the_graph->edges, msrc.value, mtgt.value))
                 {
                     found = false;
@@ -2240,12 +2256,9 @@ enum move {
  * a dynamic string, otherwise it should return NULL. If the algorithm runs longer than time-
  * out milliseconds without finding a solution it will return NULL either.
  */
-static char* solve_bruteforce(const game_state* currstate, game_state** solvedstate,
+static char* solve_bruteforce(const game_state* currstate, game_state** solvedstate, tree234** solution,
                                 int* movessize, int* moveslen, clock_t begin, int timeout)
 {
-#ifdef BENCHMARKS
-    bool solved;
-#endif
     int i;
     edge* e;
 
@@ -2261,7 +2274,7 @@ static char* solve_bruteforce(const game_state* currstate, game_state** solvedst
             game_state* nextstate = dup_game(currstate);
             contract_edge(nextstate->base, e->src, e->tgt);
             LOG(("Bruteforce solver - Contracted edge %d-%d\n", e->src, e->tgt));
-            if ((moves = solve_bruteforce(nextstate, solvedstate, movessize, moveslen, begin, timeout)))
+            if ((moves = solve_bruteforce(nextstate, solvedstate, solution, movessize, moveslen, begin, timeout)))
             {
                 char buf[80];
                 char* oldmoves = NULL;
@@ -2298,17 +2311,12 @@ static char* solve_bruteforce(const game_state* currstate, game_state** solvedst
             free_game(nextstate);
         }  
     }
-#ifdef BENCHMARKS
-    else if ((solved = isomorphism_degheuristic(currstate->minor, currstate->base)))
+    else if (isomorphism_degheuristic(currstate->minor, currstate->base, solution))
     {
-#else
-    else if (isomorphism_degheuristic(currstate->minor, currstate->base))
-    {
-#endif
         LOG(("Bruteforce solver - Found solution\n"));
         char* moves = snewn(*movessize, char);
 #ifdef BENCHMARKS
-        assert(solved == isomorphism_bruteforce(currstate->minor, currstate->base));
+        assert(isomorphism_bruteforce(currstate->minor, currstate->base));
 #endif
         *moves = 'S';
         *moveslen = 1;
@@ -2550,10 +2558,11 @@ static char *solve_game(const game_state *state, const game_state *currstate,
      * Implement another algorithm that can detect minors without any knowledge about the
      * subgraphs.
      */
-    if (!(solved->solved = isomorphism_degheuristic(solved->minor, solved->base)))
+    if (!(solved->solved = isomorphism_degheuristic(solved->minor, solved->base, NULL)))
     {
+        tree234* solution = NULL;
 #ifdef BENCHMARKS
-        assert(solved->solved == isomorphism_bruteforce(solved->minor, solved->base));
+        assert(!isomorphism_bruteforce(solved->minor, solved->base));
 #endif
         sfree(ret);
         ret = NULL;
@@ -2562,20 +2571,20 @@ static char *solve_game(const game_state *state, const game_state *currstate,
         retsize = 256;
         retlen = 0;
         clock_t begin = clock();
-        if ((ret = solve_bruteforce(currstate, &solved, &retsize, &retlen, begin, 100)))
+        if ((ret = solve_bruteforce(currstate, &solved, &solution, &retsize, &retlen, begin, 100)))
         {
-            long coord_lim = COORDLIMIT(currstate->params.n_base);
-            long circle_rad = MINORRADIUS(currstate->params.n_base);
-            tmp = coord_lim - (2 * COORDMARGIN);
             LOG(("Used bruteforce solver to solve puzzle\n"));
             for (i = 0; (vx = index234(solved->base->vertices, i)) != NULL; i++)
             {
-                double angle = ((double) i * 2.0 * PI) / (double) n_min;
+                mapping mvx;
+                mvx.key = vx->idx;
+                mvx.value = -1;
+                mvx.value = ((mapping*) find234(solution, &mvx, NULL))->value;
+                LOG(("Vertex %d in the base graph corresponds to vertex %d in the minor\n", vx->idx,
+                    mvx.value));
                 pt = solved->base->points + vx->idx;
-                pt->x = (((double) tmp / 2.0) + ((double) circle_rad * sin(angle)) + COORDMARGIN)
-                        * COORDUNIT;
-                pt->y = (((double) tmp / 2.0) + ((double) circle_rad * cos(angle)) + COORDMARGIN)
-                        * COORDUNIT;
+                pt->x = solved->minor->points[mvx.value].x;
+                pt->y = solved->minor->points[mvx.value].y;
                 pt->d = 1;
                 retoff = sprintf(buf, "%d:%d-%ld-%ld;", MOVE_DRAGPOINT, vx->idx, pt->x, pt->y);
                 if (retlen + retoff >= retsize)
@@ -3089,7 +3098,7 @@ static game_state *execute_move(const game_state *state, const char *move)
 
         if (!(current_move == MOVE_DRAGPOINT || state->solved || ret->solved))
         {
-            ret->solved = isomorphism_degheuristic(ret->minor, ret->base);
+            ret->solved = isomorphism_degheuristic(ret->minor, ret->base, NULL);
 #ifdef BENCHMARKS
             assert(ret->solved == isomorphism_bruteforce(ret->minor, ret->base));
 #endif
@@ -3302,7 +3311,7 @@ static void game_redraw(drawing *dr, game_drawstate *ds,
                 COL_TEXT, "MINOR");
     draw_text(dr, ds->grid_size + (ds->grid_size / 2), ds->headline_height / 2,
                 FONT_FIXED, ds->headline_height / 2, ALIGN_VCENTRE | ALIGN_HCENTRE,
-                COL_TEXT, "ORIGINAL");
+                COL_TEXT, "BASE");
     
     /* Draw the minor edges in the intended grid */
     pts = state->minor->points;
