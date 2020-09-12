@@ -129,8 +129,6 @@ typedef struct graph {
     vertex* vtcs;
     /* 234-tree of vertices - maps the current game state */
     tree234* vertices;
-    /* array of 234-trees of eaten vertices during contractions */
-    tree234** eaten_vertices;
 
     /* 234-tree of edges - maps the current game state */
     tree234* edges;
@@ -244,7 +242,7 @@ static game_params *dup_params(const game_params *params)
 static void decode_params(game_params *params, char const *string)
 {
     int mode;
-    if (sscanf(string, "%d:%d-%d", &mode, &params->n_base, &params->n_min) != 3)
+    if (sscanf(string, "%d-%dx%d", &mode, &params->n_base, &params->n_min) != 3)
     {
         /* params encoding was incorrect */
         *params = DEFAULT_PRESET;
@@ -259,7 +257,7 @@ static char *encode_params(const game_params *params, bool full)
 {
     char buf[80];
 
-    sprintf(buf, "%d:%d-%d", params->mode, params->n_base, params->n_min);
+    sprintf(buf, "%d-%dx%d", params->mode, params->n_base, params->n_min);
     
     return dupstr(buf);
 }
@@ -1432,7 +1430,6 @@ static const char *validate_desc(const game_params *params, const char *desc)
  */
 static graph* parse_graph(const char** desc, enum grid grid, int n, long lim, long mar)
 {
-    int i;
     int idx, deg;
     int src, tgt;
     long x, y;
@@ -1444,11 +1441,6 @@ static graph* parse_graph(const char** desc, enum grid grid, int n, long lim, lo
     ret->points = snewn(n, point);
     ret->vtcs = snewn(n, vertex);
     ret->vertices = newtree234(vertcmp);
-    ret->eaten_vertices = snewn(n, tree234*);
-    for (i = 0; i < n; i++)
-    {
-        ret->eaten_vertices[i] = newtree234(vertcmp);
-    }
     ret->edges = newtree234(edgecmp);
     do
     {
@@ -1566,7 +1558,7 @@ static void* edgecpy(void* state, void* elem)
  */
 static graph* dup_graph(const graph* gr, int n)
 {
-    int i, j;
+    int i;
     vertex* vx;
     graph* ret = snew(graph);
 
@@ -1584,19 +1576,6 @@ static graph* dup_graph(const graph* gr, int n)
 #if DEBUG
     assert(ret->vtcs[vx->idx].idx == vx->idx);
 #endif
-    }
-
-    ret->eaten_vertices = snewn(n, tree234*);
-    for (i = 0; i < n; i++)
-    {
-        ret->eaten_vertices[i] = newtree234(vertcmp);
-        for (j = 0; (vx = index234(gr->eaten_vertices[i], j)) != NULL; j++)
-        {
-            add234(ret->eaten_vertices[i], ret->vtcs + vx->idx);
-#if DEBUG
-    assert(ret->vtcs[vx->idx].idx == vx->idx);
-#endif
-        }
     }
 
     ret->edges = copytree234(gr->edges, edgecpy, NULL);
@@ -1624,7 +1603,6 @@ static game_state *dup_game(const game_state *state)
  */
 static void free_graph(graph* gr, int n)
 {
-    int i;
     edge* e;
     (gr->refcount)--;
     if (gr->refcount <= 0)
@@ -1632,9 +1610,6 @@ static void free_graph(graph* gr, int n)
         sfree(gr->points);
         sfree(gr->vtcs);
         freetree234(gr->vertices);
-        for (i = 0; i < n; i++) freetree234(gr->eaten_vertices[i]);
-        sfree(gr->eaten_vertices);
-        
         while((e = delpos234(gr->edges, 0)) != NULL) sfree(e);
         freetree234(gr->edges);
         sfree(gr);
@@ -1706,7 +1681,6 @@ static void contract_edge(graph* graph, int dom, int rec)
     graph->points[dom].x += (graph->points[rec].x - graph->points[dom].x) / 2;
     graph->points[dom].y += (graph->points[rec].y - graph->points[dom].y) / 2;
     del234(graph->vertices, graph->vtcs + rec);
-    add234(graph->eaten_vertices[dom], graph->vtcs + rec);
 #if DEBUG
     assert(graph->vtcs[rec].idx == rec);
 #endif
@@ -1867,6 +1841,11 @@ static int mappingcmpC(const void* av, const void* bv)
     else return 0;
 }
 
+static int mappingcmp(void* av, void* bv)
+{
+    return mappingcmpC(av, bv);
+}
+
 /*
  * Copy a single mapping
  */
@@ -1877,11 +1856,6 @@ static void* mappingcpy(void* state, void* elem)
     *mcpy = *m;
     
     return (void*) mcpy;
-}
-
-static int mappingcmp(void* av, void* bv)
-{
-    return mappingcmpC(av, bv);
 }
 
 /*
@@ -2327,52 +2301,6 @@ static char* solve_bruteforce(const game_state* currstate, game_state** solvedst
     return NULL;
 }
 
-#ifdef SHARE_ADJACENT_VERTEX_HEURISTIC
-/*
- * Check whether two vertices from different subgraphs are adjacent to the same
- * vertex.
- */
-static bool share_adjacent_vertex(const game_state* state, int vxa, int vxb, int n1)
-{
-    int i;
-    edge* e;
-    if (vxa / n1 == vxb / n1) return false;
-    for (i = 0; (e = index234(state->base->edges, i)) != NULL; i++)
-    {
-        if ((e->src == vxa && e->tgt != vxb && isedge(state->base->edges, vxb, e->tgt))
-            || (e->tgt == vxa && e->tgt != vxb && isedge(state->base->edges, e->src, vxb)))
-            return true;
-    }
-    return false;
-}
-#endif
-
-#ifdef REPRESENT_MINOR_EDGE_HEURISTIC
-/*
- * Check whether two adjacent vertices from different subgraphs represent an
- * edge of the minor.
- */
-static bool represent_minor_edge(const game_state* state, int vxa, int vxb, int n1)
-{
-    if (vxa / n1 == vxb / n1) return false;
-    return isedge(state->minor->edges, vxa / n1, vxb / n1);
-}
-#endif
-
-#define EDGE_COUNT_DIFFERENCE_HEURISTIC
-
-#ifdef EDGE_COUNT_DIFFERENCE_HEURISTIC
-static int edge_count_difference(const game_state* state, int vxa, int vxb)
-{
-    int diff;
-    game_state* tmp = dup_game(state);
-    contract_edge(tmp->base, vxa, vxb);
-    diff = count234(tmp->base->edges) - count234(tmp->minor->edges);
-    free_game(tmp);
-    return diff;
-}
-#endif
-
 static char *solve_game(const game_state *state, const game_state *currstate,
                         const char *aux, const char **error)
 {
@@ -2388,13 +2316,11 @@ static char *solve_game(const game_state *state, const game_state *currstate,
     int n_1sub = n_base / n_min;
     int n_nsub = n_min * n_1sub;
 
-    int i, j;
-    int tmp;
+    int i;
 
     point* pt;
     vertex* vx;
     edge* e;
-    tree234* eaten_vtcs;
 
     game_state* solved;
 
@@ -2462,89 +2388,39 @@ static char *solve_game(const game_state *state, const game_state *currstate,
      */
     for (i = 0; i < n_min; i++)
     {
+        bool contr = false;
         edge contre;
         contre.src = i * n_1sub;
-        for (contre.src = i * n_1sub; contre.src < ((i + 1) * n_1sub) - 1; contre.src++)
+        contre.tgt = contre.src + 1;
+        while (contre.tgt < (i + 1) * n_1sub)
         {
-            for (contre.tgt = contre.src + 1; contre.tgt < (i + 1) * n_1sub; contre.tgt++)
-            {
-                if (isedge(solved->base->edges, contre.src, contre.tgt))
+            if (isedge(solved->base->edges, contre.src, contre.tgt))
+            { 
+                retoff = sprintf(buf, "%d:%d-%d;", MOVE_CONTREDGE, contre.src, contre.tgt);
+                if (retlen + retoff >= retsize)
                 {
-                    eaten_vtcs = solved->base->eaten_vertices[contre.src];
-                    if ((tmp = count234(eaten_vtcs)))
-                    {
-                        for (j = 0; (vx = index234(eaten_vtcs, j)) != NULL; j++)
-                        {
-                            if (vx->idx < n_nsub && vx->idx >= (i + 1) * n_1sub)
-                            {
-                                LOG(("Vertex %d has eaten vertex %d from different subgraph\n",
-                                    contre.src, vx->idx));
-                                goto next_src;
-                            }
-                        }
-                    }
-                    eaten_vtcs = solved->base->eaten_vertices[contre.tgt];
-                    if ((tmp = count234(eaten_vtcs)))
-                    {
-                        for (j = 0; (vx = index234(eaten_vtcs, j)) != NULL; j++)
-                        {
-                            if (vx->idx < n_nsub && vx->idx >= (i + 1) * n_1sub)
-                            {
-                                LOG(("Vertex %d has eaten vertex %d from different subgraph\n",
-                                    contre.tgt, vx->idx));
-                                goto next_tgt;
-                            }
-                        }
-                    }
-                    
-                    retoff = sprintf(buf, "%d:%d-%d;", MOVE_CONTREDGE, contre.src, contre.tgt);
-                    if (retlen + retoff >= retsize)
-                    {
-                        retsize = retlen + retoff + 256;
-                        ret = sresize(ret, retsize, char);
-                    }
-                    strcpy(ret + retlen, buf);
-                    retlen += retoff;
-
-                    LOG(("Number of visible vertices is %d\n", count234(solved->base->vertices)));
-                    contract_edge(solved->base, contre.src, contre.tgt);
-                    LOG(("Contracted edge %d-%d\n", contre.src, contre.tgt));
-                    LOG(("Number of visible vertices is %d\n", count234(solved->base->vertices)));
+                    retsize = retlen + retoff + 256;
+                    ret = sresize(ret, retsize, char);
                 }
-                next_tgt:;
+                strcpy(ret + retlen, buf);
+                retlen += retoff;
+
+                LOG(("Number of visible vertices is %d\n", count234(solved->base->vertices)));
+                contract_edge(solved->base, contre.src, contre.tgt);
+                LOG(("Contracted edge %d-%d\n", contre.src, contre.tgt));
+                LOG(("Number of visible vertices is %d\n", count234(solved->base->vertices)));
+
+                contr = true;
+                contre.tgt = contre.src + 1;
             }
-            next_src:;
-        }
-    }
-    for (i = 0; (e = index234(solved->base->edges, i)) != NULL; i++)
-    {
-        eaten_vtcs = solved->base->eaten_vertices[e->src];
-        if ((tmp = count234(eaten_vtcs)))
-        {
-            for (j = 0; (vx = index234(eaten_vtcs, j)) != NULL; j++)
+            else if (contre.tgt == ((i + 1) * n_1sub) - 1 && !contr)
             {
-                if (vx->idx < n_nsub
-                    && ((e->src / n_1sub != e->tgt / n_1sub && vx->idx / n_1sub == e->tgt / n_1sub
-                            && (edge_count_difference(solved, e->src, e->tgt) >= 0))
-                        || (solved->base->vtcs[e->src].deg == 1 || solved->base->vtcs[e->tgt].deg == 1)))
-                {
-                    LOG(("Vertex %d has eaten vertex %d from same subgraph as vertex %d\n",
-                        e->src, vx->idx, e->tgt));
-                    retoff = sprintf(buf, "%d:%d-%d;", MOVE_CONTREDGE, e->src, e->tgt);
-                    if (retlen + retoff >= retsize)
-                    {
-                        retsize = retlen + retoff + 256;
-                        ret = sresize(ret, retsize, char);
-                    }
-                    strcpy(ret + retlen, buf);
-                    retlen += retoff;
-
-                    LOG(("Number of visible vertices is %d\n", count234(solved->base->vertices)));
-                    LOG(("Contracting edge %d-%d\n", e->src, e->tgt));
-                    contract_edge(solved->base, e->src, e->tgt);
-                    LOG(("Number of visible vertices is %d\n", count234(solved->base->vertices)));
-                    break;
-                }
+                contre.src++;
+                contre.tgt = contre.src + 1;
+            }
+            else
+            {
+                contre.tgt++;
             }
         }
     }
