@@ -848,6 +848,33 @@ static void make_K_33(tree234* edges, vertex* vertices, int n)
 }
 
 /*
+ * Extended edge. Stores a value proportional to the distance between its
+ * incident vertices.
+ */
+typedef struct edge_ext {
+    edge e;
+    ulong dist;
+    int degsum;
+} edge_ext;
+
+static int eextcmpC(const void *av, const void  *bv)
+{
+    const edge_ext *a = (edge_ext *)av;
+    const edge_ext *b = (edge_ext *)bv;
+
+    if (a->degsum < b->degsum) return -1;
+    else if (a->degsum > b->degsum) return 1;
+    else if (a->dist < b->dist) return -1;
+    else if (a->dist > b->dist) return 1;
+    else return edgecmpC(&a->e, &b->e);
+}
+
+static int eextcmp(void *av, void *bv)
+{
+    return eextcmpC(av, bv);
+}
+
+/*
  * These parameters are highly sensitive, changing them may cause problems when
  * generating new game descriptions.
  */
@@ -1015,69 +1042,62 @@ static char *new_game_desc(const game_params *params, random_state *rs,
         bool added = false;
         edge beste;
         edge* _e;
-        tree234* vtcs_src = newtree234(vertcmp);
-        tree234* vtcs_tgt = newtree234(vertcmp);
+        edge_ext* eext;
+        tree234* eexts = newtree234(eextcmp);
         beste.src = beste.tgt = -1;
         for (j = e->src * n_sub; j < (e->src + 1) * n_sub; j++)
         {
-            add234(vtcs_src, vtcs_base + j);
-        }
-        for (j = e->tgt * n_sub; j < (e->tgt + 1) * n_sub; j++)
-        {
-            add234(vtcs_tgt, vtcs_base + j);
-        }
-        for (j = 0; j < n_sub; j++)
-        {
-            beste.src = ((vertex*) index234(vtcs_src, j))->idx;
-            for (k = 0; k < n_sub; k++)
+            for (k = e->tgt * n_sub; k < (e->tgt + 1) * n_sub; k++)
             {
-                beste.tgt = ((vertex*) index234(vtcs_tgt, k))->idx;
-                if (params->mode == NORMAL)
-                {
-                    /* check for crossing edges */
-                    for (l = 0; (_e = index234(edges_base_234, l)) != NULL; l++)
-                    {
-                        if (_e->src == beste.src || _e->tgt == beste.src
-                            || _e->src == beste.tgt || _e->tgt == beste.tgt)
-                            continue;
-                        else if (cross(pts_base[beste.src], pts_base[beste.tgt],
-                                        pts_base[_e->src], pts_base[_e->tgt]))
-                            goto next_tgt; /* this edge crosses another edge => next target */
-                    }
-                }
-                /* check for crossing points */
-                for (l = 0; l < n_min * n_sub; l++)
-                {
-                    if (l == beste.src || l == beste.tgt)
-                        continue;
-                    else if (crosspoint(pts_base[beste.src], pts_base[beste.tgt], pts_base[l]))
-                        goto next_tgt; /* this edge crosses a point => next target */
-                }
-                addedge(edges_base_234, beste.src, beste.tgt);
-                added = true;
-                goto next_edge;
-                next_tgt:;
+                eext = snew(edge_ext);
+                eext->e = (edge) { j, k };
+                eext->dist = square((ulong) (pts_base[k].x - pts_base[j].x))
+                                + square((ulong) (pts_base[k].y - pts_base[j].y));
+                eext->degsum = vtcs_base[j].deg + vtcs_base[k].deg;
+                add234(eexts, eext);
             }
         }
-        next_edge:
+#if DEBUG
+        for (j = 0; (eext = index234(eexts, j)) != NULL; j++)
+        {
+            LOG(("Added extended edge with source %d, target %d, squared distance"\
+                " %lu and degree sum %d at position %ld to the 234-tree of extended"\
+                " edges\n", eext->e.src, eext->e.tgt, eext->dist, eext->degsum, j));
+        }
+#endif
+        for (j = 0; (eext = index234(eexts, j)) != NULL; j++)
+        {
+            beste = eext->e;
+            if (params->mode == NORMAL)
+            {
+                /* check for crossing edges */
+                for (l = 0; (_e = index234(edges_base_234, l)) != NULL; l++)
+                {
+                    if (_e->src == beste.src || _e->tgt == beste.src
+                        || _e->src == beste.tgt || _e->tgt == beste.tgt)
+                        continue;
+                    else if (cross(pts_base[beste.src], pts_base[beste.tgt],
+                                    pts_base[_e->src], pts_base[_e->tgt]))
+                        goto next_subedge; /* this edge crosses another edge => next target */
+                }
+            }
+            /* check for crossing points */
+            for (l = 0; l < n_min * n_sub; l++)
+            {
+                if (l == beste.src || l == beste.tgt)
+                    continue;
+                else if (crosspoint(pts_base[beste.src], pts_base[beste.tgt], pts_base[l]))
+                    goto next_subedge; /* this edge crosses a point => next target */
+            }
+            addedge(edges_base_234, beste.src, beste.tgt);
+            added = true;
+            goto next_minedge;
+            next_subedge:;
+        }
+        next_minedge:
         if (!added)
         {
-            int sqdist;
-            int best_sqdist = square(coord_lim * COORDUNIT);
-            for (j = e->src * n_sub; j < (e->src + 1) * n_sub; j++)
-            {
-                for (k = e->tgt * n_sub; k < (e->tgt + 1) * n_sub; k++)
-                {
-                    sqdist = square(pts_base[k].x - pts_base[j].x)
-                            + square(pts_base[k].y - pts_base[j].y);
-                    if (sqdist < best_sqdist)
-                    {
-                        best_sqdist = sqdist;
-                        beste.src = j;
-                        beste.tgt = k;
-                    }
-                }
-            }
+            beste = ((edge_ext*) index234(eexts, 0))->e;
             addedge(edges_base_234, beste.src, beste.tgt);
         }
         LOG(("Added edge between subgraphs %d and %d (base graph vertices %d and %d)\n",
@@ -1086,6 +1106,8 @@ static char *new_game_desc(const game_params *params, random_state *rs,
         vtcs_base[beste.tgt].deg++;
         LOG(("Updated degrees of vertices %d to %d and %d to %d\n", vtcs_base[beste.src].idx,
             vtcs_base[beste.src].deg, vtcs_base[beste.tgt].idx, vtcs_base[beste.tgt].deg));
+        while ((eext = delpos234(eexts, 0)) != NULL) sfree(eext);
+        freetree234(eexts);
     }
 
     /*
