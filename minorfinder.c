@@ -19,7 +19,7 @@
 #include "tree234.h"
 
 /* debug mode */
-#define DEBUG false
+#define DEBUG true
 
 #define BENCHMARKS
 
@@ -887,6 +887,74 @@ static int eextcmp(void *av, void *bv)
 #define SUBGRAPH_POINTENTROPY 2
 #define OVERLAYPOINT_TRESHOLD square(4 * POINTRADIUS)
 
+static void waddedges(tree234* edges, vertex* vertices, point* points, int src, int n, int lim)
+{
+    int i, j, k;
+
+    if (vertices[src].deg == 0)
+    {
+        int found = -1;
+        long best_sqdists[3];
+        edge bestes[3];
+        best_sqdists[0] = best_sqdists[1] = best_sqdists[2] = square(lim * COORDUNIT);
+        bestes[0].tgt = bestes[1].tgt = bestes[2].tgt = src;
+        for (i = 0; i < src; i++)
+        {
+            bool cross = false;
+            if (i == src)
+            {
+                continue;
+            }
+            /* check for crossing points */
+            for (j = 0; j < n; j++)
+            {
+                if (j == src || j == i)
+                {
+                    continue;
+                }
+                else if (crosspoint(points[i], points[src], points[j]))
+                {
+                    cross = true;
+                    break;
+                }
+            }
+            if (!cross)
+            {
+                long sqdist = square(points[i].x - points[src].x)
+                                + square(points[i].y - points[src].y);
+                for (j = 0; j < 3; j++)
+                {
+                    if (sqdist < best_sqdists[j])
+                    {
+                        if (found < 2) found++;
+                        for (k = found; k > j; k--)
+                        {
+                            best_sqdists[k] = best_sqdists[k-1];
+                            bestes[k].src = bestes[k-1].src;
+                        }
+                        best_sqdists[j] = sqdist;
+                        bestes[j].src = i;
+                        for (k = 0; k <= found; k++)
+                        {
+                            LOG(("%d-st/nd/th shortest edge is %d-%d\n", k, bestes[k].src, bestes[k].tgt));
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+        for (i = 0; i <= found; i++)
+        {
+            addedge(edges, bestes[i].src, bestes[i].tgt);
+#if DEBUG
+            assert(find234(edges, bestes + i, NULL));
+#endif
+            vertices[bestes[i].src].deg++;
+            vertices[bestes[i].tgt].deg++;
+        }
+    }
+}
+
 static char *new_game_desc(const game_params *params, random_state *rs,
 			   char **aux, bool interactive)
 {
@@ -1160,6 +1228,10 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     {
         case NORMAL:
             addedges(edges_base_234, vtcs_base, pts_base, 0, n_base, n_min * n_sub, -1, n_base, -1, rs);
+            for (i = n_min * n_sub; i < n_base; i++)
+            {
+                waddedges(edges_base_234, vtcs_base, pts_base, i, n_base, coord_lim);
+            }
             break;
         /*
          * Avoid edges across the whole grid since that makes the graph too unclear.
@@ -1169,65 +1241,7 @@ static char *new_game_desc(const game_params *params, random_state *rs,
         case WAGNER:
             for (i = n_min * n_sub; i < n_base; i++)
             {
-                int found = -1;
-                long best_sqdists[3];
-                edge bestes[3];
-                best_sqdists[0] = best_sqdists[1] = best_sqdists[2] = square(coord_lim * COORDUNIT);
-                bestes[0].tgt = bestes[1].tgt = bestes[2].tgt = i;
-                for (j = 0; j < i; j++)
-                {
-                    bool cross = false;
-                    if (j == i)
-                    {
-                        continue;
-                    }
-                    /* check for crossing points */
-                    for (k = 0; k < n_base; k++)
-                    {
-                        if (k == i || k == j)
-                        {
-                            continue;
-                        }
-                        else if (crosspoint(pts_base[j], pts_base[i], pts_base[k]))
-                        {
-                            cross = true;
-                            break;
-                        }
-                    }
-                    if (!cross)
-                    {
-                        long sqdist = square(pts_base[j].x - pts_base[i].x)
-                                        + square(pts_base[j].y - pts_base[i].y);
-                        for (k = 0; k < 3; k++)
-                        {
-                            if (sqdist < best_sqdists[k])
-                            {
-                                if (found < 2) found++;
-                                for (l = found; l > k; l--)
-                                {
-                                    best_sqdists[l] = best_sqdists[l-1];
-                                    bestes[l].src = bestes[l-1].src;
-                                }
-                                best_sqdists[k] = sqdist;
-                                bestes[k].src = j;
-                                for (l = 0; l <= found; l++)
-                                {
-                                    LOG(("%ld-st/nd/th shortest edge is %d-%d\n", l, bestes[l].src, bestes[l].tgt));
-                                }
-                                break;
-                            }
-                        }
-                    }
-                }
-                for (j = 0; j <= found; j++)
-                {
-                    addedge(edges_base_234, bestes[j].src, bestes[j].tgt);
-#if DEBUG
-                    assert(find234(edges_base_234, bestes + j, NULL));
-#endif
-                    vtcs_base[bestes[j].src].deg++;
-                    vtcs_base[bestes[j].tgt].deg++;
-                }
+                waddedges(edges_base_234, vtcs_base, pts_base, i, n_base, coord_lim);
             }
             break;
         default:;
