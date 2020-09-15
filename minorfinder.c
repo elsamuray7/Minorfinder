@@ -21,7 +21,7 @@
 /* debug mode */
 #define DEBUG false
 
-/*#define BENCHMARKS*/
+#define BENCHMARKS
 
 /* enable or disable console log */
 #if DEBUG
@@ -961,6 +961,95 @@ static void addedges_rempts_shodist(tree234* edges, vertex* vertices, point* poi
     }
 }
 
+#ifdef BENCHMARKS
+#define COST_MOVEPOINT 1
+#define COST_ADDEDGE 3
+#define COST_DELEDGE 3
+
+static tree234* LastBaseEdges = NULL;
+static point* LastBasePts = NULL;
+static int LastNBase = 0;
+static int LastNMin = 0;
+
+static int GraphDissim = 0;
+
+/*
+ * Calculate the dissimilarity of the previous and current graph by comparing their edges and
+ * vertices and summing up the predefined costs for the three operations add edge, delete edge
+ * and move point that are required to transform the previous graph into the current.
+ */
+static void calc_basegraph_dissim(tree234* curr_base_edges, point* curr_base_pts, int curr_n_base,
+                            int curr_n_min)
+{
+    int i, j, k;
+    point* last_pt;
+    point* curr_pt;
+    edge* e;
+
+    GraphDissim = 0;
+
+    if (LastBaseEdges && LastBasePts && LastNBase && LastNMin
+        && LastNBase == curr_n_base && LastNMin == curr_n_min)
+    {
+        int n_sub;
+        for (i = 0; (e = index234(LastBaseEdges, i)) != NULL; i++)
+        {
+            if (find234(curr_base_edges, e, NULL) == NULL)
+                GraphDissim += COST_ADDEDGE;
+        }
+        for (i = 0; (e = index234(curr_base_edges, i)) != NULL; i++)
+        {
+            if (find234(LastBaseEdges, e, NULL) == NULL)
+                GraphDissim += COST_DELEDGE;
+        }
+        n_sub = LastNBase / LastNMin;
+        for (i = 0; i < LastNMin; i++)
+        {
+            for (j = i * n_sub; j < (i + 1) * n_sub; j++)
+            {
+                bool moved = true;
+                last_pt = LastBasePts + j;
+                for (k = i * n_sub; k < (i + 1) * n_sub; k++)
+                {
+                    curr_pt = curr_base_pts + k;
+                    if (curr_pt->x == last_pt->x
+                        && curr_pt->y == last_pt->y)
+                    {
+                        moved = false;
+                        break;
+                    }
+                }
+                if (moved) GraphDissim += COST_MOVEPOINT;
+            }
+        }
+        for (i = LastNMin * n_sub; i < LastNBase; i++)
+        {
+            bool moved = true;
+            last_pt = LastBasePts + i;
+            for (j = LastNMin * n_sub; j < LastNBase; j++)
+            {
+                curr_pt = curr_base_pts + j;
+                if (curr_pt->x == last_pt->x
+                    && curr_pt->y == last_pt->y)
+                {
+                    moved = true;
+                    break;
+                }
+            }
+            if (moved) GraphDissim += COST_MOVEPOINT;
+        }
+        while ((e = delpos234(LastBaseEdges, 0)) != NULL) sfree(e);
+        freetree234(LastBaseEdges);
+        sfree(LastBasePts);
+    }
+
+    LastBaseEdges = curr_base_edges;
+    LastBasePts = curr_base_pts;
+    LastNBase = curr_n_base;
+    LastNMin = curr_n_min;
+}
+#endif
+
 static char *new_game_desc(const game_params *params, random_state *rs,
 			   char **aux, bool interactive)
 {
@@ -1374,13 +1463,21 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     *aux = NULL;
 
     sfree(pts_min);
-    sfree(pts_base);
     sfree(vtcs_min);
-    sfree(vtcs_base);
     while ((e = delpos234(edges_min_234, 0)) != NULL) sfree(e);
     freetree234(edges_min_234);
+
+    sfree(vtcs_base);
+#ifndef BENCHMARKS
+    sfree(pts_base);
     while ((e = delpos234(edges_base_234, 0)) != NULL) sfree(e);
     freetree234(edges_base_234);
+#else
+    calc_basegraph_dissim(edges_base_234, pts_base, n_base, n_min);
+    if (GraphDissim)
+        printf("Base graph dissimiliarity between the last two game generations is %d\n",
+                GraphDissim);
+#endif
 
     return ret;
 }
