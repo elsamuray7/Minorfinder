@@ -848,8 +848,8 @@ static void make_K_33(tree234* edges, vertex* vertices, int n)
 }
 
 /*
- * Extended edge. Stores a value proportional to the distance between its
- * incident vertices.
+ * Extended edge. Stores a value proportional to the distance and the degree sum
+ * of its incident vertices.
  */
 typedef struct edge_ext {
     edge e;
@@ -974,9 +974,9 @@ static int LastNMin = 0;
 static int GraphDissim = 0;
 
 /*
- * Calculate the dissimilarity of the previous and current graph by comparing their edges and
- * vertices and summing up the predefined costs for the three operations add edge, delete edge
- * and move point that are required to transform the previous graph into the current.
+ * Calculate the dissimilarity of the base graphs between two game generations by comparing their
+ * edges and vertices and summing up the predefined costs for the three operations add edge, delete
+ * edge and move point that are required to transform the previous graph into the current.
  */
 static void calc_basegraph_dissim(tree234* curr_base_edges, point* curr_base_pts, int curr_n_base,
                             int curr_n_min)
@@ -992,14 +992,14 @@ static void calc_basegraph_dissim(tree234* curr_base_edges, point* curr_base_pts
         && LastNBase == curr_n_base && LastNMin == curr_n_min)
     {
         int n_sub;
-        for (i = 0; (e = index234(LastBaseEdges, i)) != NULL; i++)
-        {
-            if (find234(curr_base_edges, e, NULL) == NULL)
-                GraphDissim += COST_ADDEDGE;
-        }
         for (i = 0; (e = index234(curr_base_edges, i)) != NULL; i++)
         {
             if (find234(LastBaseEdges, e, NULL) == NULL)
+                GraphDissim += COST_ADDEDGE;
+        }
+        for (i = 0; (e = index234(LastBaseEdges, i)) != NULL; i++)
+        {
+            if (find234(curr_base_edges, e, NULL) == NULL)
                 GraphDissim += COST_DELEDGE;
         }
         n_sub = LastNBase / LastNMin;
