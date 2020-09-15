@@ -27,7 +27,7 @@ There are three possible moves to solve the puzzle:
   click on the edge that you want to contract
 2. Delete edges: **RIGHT MOUSE BUTTON**,
   click on the edge that you want to delete
-3. Delete vertices with no incident vertices: **RIGHT MOUSE BUTTON**,
+3. Delete vertices with no incident edges: **RIGHT MOUSE BUTTON**,
   click on the vertex that you want to delete
 ### Goal
 Repeatedly apply one of the possible moves to the bigger graph until it appears to be isomorphic to the minor.
