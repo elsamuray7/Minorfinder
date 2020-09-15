@@ -887,32 +887,37 @@ static int eextcmp(void *av, void *bv)
 #define SUBGRAPH_POINTENTROPY 2
 #define OVERLAYPOINT_TRESHOLD square(4 * POINTRADIUS)
 
-static void waddedges(tree234* edges, vertex* vertices, point* points, int src, int n, int lim)
+/*
+ * Add edges to the remaining points. Determine for every remaining point the three shortest
+ * possible edges that don't cross any point and add them to it.
+ */
+static void addedges_rempts_shodist(tree234* edges, vertex* vertices, point* points, int rem,
+                        int n, int lim)
 {
     int i, j, k;
 
-    if (vertices[src].deg == 0)
+    if (vertices[rem].deg == 0)
     {
         int found = -1;
         long best_sqdists[3];
         edge bestes[3];
         best_sqdists[0] = best_sqdists[1] = best_sqdists[2] = square(lim * COORDUNIT);
-        bestes[0].tgt = bestes[1].tgt = bestes[2].tgt = src;
-        for (i = 0; i < src; i++)
+        bestes[0].tgt = bestes[1].tgt = bestes[2].tgt = rem;
+        for (i = 0; i < rem; i++)
         {
             bool cross = false;
-            if (i == src)
+            if (i == rem)
             {
                 continue;
             }
             /* check for crossing points */
             for (j = 0; j < n; j++)
             {
-                if (j == src || j == i)
+                if (j == rem || j == i)
                 {
                     continue;
                 }
-                else if (crosspoint(points[i], points[src], points[j]))
+                else if (crosspoint(points[i], points[rem], points[j]))
                 {
                     cross = true;
                     break;
@@ -920,8 +925,8 @@ static void waddedges(tree234* edges, vertex* vertices, point* points, int src, 
             }
             if (!cross)
             {
-                long sqdist = square(points[i].x - points[src].x)
-                                + square(points[i].y - points[src].y);
+                long sqdist = square(points[i].x - points[rem].x)
+                                + square(points[i].y - points[rem].y);
                 for (j = 0; j < 3; j++)
                 {
                     if (sqdist < best_sqdists[j])
@@ -936,7 +941,8 @@ static void waddedges(tree234* edges, vertex* vertices, point* points, int src, 
                         bestes[j].src = i;
                         for (k = 0; k <= found; k++)
                         {
-                            LOG(("%d-st/nd/th shortest edge is %d-%d\n", k, bestes[k].src, bestes[k].tgt));
+                            LOG(("%d-st/nd/th shortest edge is %d-%d\n", k,
+                                bestes[k].src, bestes[k].tgt));
                         }
                         break;
                     }
@@ -1036,12 +1042,12 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     }
 
     /*
-     * To create the orginal graph we need to replace all minor points by subgraphs.
-     * To determine the areas in which we can place the subgraphs we need to know the
-     * shortest distance between any two adjacent minor points and for every point the
-     * shortest distance to the grid border. For every minor point the minimum of these
-     * two values is used to calculate the radius of a circular subgraph area around
-     * the minor point.
+     * To create the base graph we need to replace all minor points by subgraphs.
+     * Therefore we need to determine the areas in which we can place the subgraphs
+     * which depend on the shortest distance between the minor points and their
+     * neirest neighbours and the grid border respectively. For every minor point
+     * the minimum of these two values is used to calculate the radius of a circular
+     * subgraph area around the minor point.
      */
     tmp = COORDMARGIN * COORDUNIT;
     tmp2 = (coord_lim - COORDMARGIN) * COORDUNIT;
@@ -1215,8 +1221,8 @@ static char *new_game_desc(const game_params *params, random_state *rs,
         }
         pt = pts_base + tmp2 + tmp3++;
         *pt = p;
-        LOG(("Assigned coordinates x:%ld, y:%ld and denominator %ld to base graph point %ld\n",
-            pt->x, pt->y, pt->d, tmp2 + tmp3 - 1));
+        LOG(("Assigned coordinates x:%ld, y:%ld and denominator %ld to base graph point"\
+            "%ld\n", pt->x, pt->y, pt->d, tmp2 + tmp3 - 1));
         if (tmp2 + tmp3 >= n_base) break;
         next_coords:;
     }
@@ -1227,10 +1233,12 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     switch (params->mode)
     {
         case NORMAL:
-            addedges(edges_base_234, vtcs_base, pts_base, 0, n_base, n_min * n_sub, -1, n_base, -1, rs);
+            addedges(edges_base_234, vtcs_base, pts_base, 0, n_base, n_min * n_sub, -1,
+                    n_base, -1, rs);
             for (i = n_min * n_sub; i < n_base; i++)
             {
-                waddedges(edges_base_234, vtcs_base, pts_base, i, n_base, coord_lim);
+                addedges_rempts_shodist(edges_base_234, vtcs_base, pts_base, i, n_base,
+                                        coord_lim);
             }
             break;
         /*
@@ -1241,7 +1249,8 @@ static char *new_game_desc(const game_params *params, random_state *rs,
         case WAGNER:
             for (i = n_min * n_sub; i < n_base; i++)
             {
-                waddedges(edges_base_234, vtcs_base, pts_base, i, n_base, coord_lim);
+                addedges_rempts_shodist(edges_base_234, vtcs_base, pts_base, i, n_base,
+                                        coord_lim);
             }
             break;
         default:;
