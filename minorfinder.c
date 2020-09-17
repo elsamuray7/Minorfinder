@@ -962,16 +962,22 @@ static void addedges_rempts_shodist(tree234* edges, vertex* vertices, point* poi
 }
 
 #ifdef BENCHMARKS
-#define COST_MOVEPOINT 1
-#define COST_ADDEDGE 3
-#define COST_DELEDGE 3
+/*
+ * Costs for visible changes to the graph to transform one into the other. Although edges are
+ * moved together with their incident vertices we count that as two visible changes. One to the
+ * vertex itself and one to the set of its incident edges.
+ */
+#define COST_SWITCHIDCS 1.0F
+#define COST_MOVEPOINT 2.0F
+#define COST_ADDEDGE 1.0F
+#define COST_DELEDGE 1.0F
 
 static tree234* LastBaseEdges = NULL;
 static point* LastBasePts = NULL;
 static int LastNBase = 0;
 static int LastNMin = 0;
 
-static int GraphDissim = 0;
+static float GraphDissim = 0.0F;
 
 /*
  * Calculate the dissimilarity of the base graphs between two game generations by comparing their
@@ -986,7 +992,7 @@ static void calc_basegraph_dissim(tree234* curr_base_edges, point* curr_base_pts
     point* curr_pt;
     edge* e;
 
-    GraphDissim = 0;
+    GraphDissim = 0.0F;
 
     if (LastBaseEdges && LastBasePts && LastNBase && LastNMin
         && LastNBase == curr_n_base && LastNMin == curr_n_min)
@@ -1020,6 +1026,7 @@ static void calc_basegraph_dissim(tree234* curr_base_edges, point* curr_base_pts
                     }
                 }
                 if (moved) GraphDissim += COST_MOVEPOINT;
+                else GraphDissim += COST_SWITCHIDCS;
             }
         }
         for (i = LastNMin * n_sub; i < LastNBase; i++)
@@ -1032,11 +1039,12 @@ static void calc_basegraph_dissim(tree234* curr_base_edges, point* curr_base_pts
                 if (curr_pt->x == last_pt->x
                     && curr_pt->y == last_pt->y)
                 {
-                    moved = true;
+                    moved = false;
                     break;
                 }
             }
             if (moved) GraphDissim += COST_MOVEPOINT;
+            else GraphDissim += COST_SWITCHIDCS;
         }
         while ((e = delpos234(LastBaseEdges, 0)) != NULL) sfree(e);
         freetree234(LastBaseEdges);
@@ -1475,7 +1483,7 @@ static char *new_game_desc(const game_params *params, random_state *rs,
 #else
     calc_basegraph_dissim(edges_base_234, pts_base, n_base, n_min);
     if (GraphDissim)
-        printf("Base graph dissimiliarity between the last two game generations is %d\n",
+        printf("Base graph dissimiliarity between the last two game generations is %f\n",
                 GraphDissim);
 #endif
 
