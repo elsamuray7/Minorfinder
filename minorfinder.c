@@ -1854,6 +1854,28 @@ static void delete_edge(graph* graph, edge e)
 }
 
 /*
+ * Delete a vertex from a graph
+ */
+static void delete_vertex(graph* graph, vertex v)
+{
+    int i;
+    edge* e;
+    tree234* edgescpy = copytree234(graph->edges, edgecpy, NULL);
+
+    for (i = 0; (e = index234(edgescpy, i)) != NULL; i++)
+    {
+        /* delete all edges that are incident to the vertex */
+        if (e->src == v.idx || e->tgt == v.idx)
+            delete_edge(graph, *e);
+    }
+
+    /* delete the vertex */
+    del234(graph->vertices, &v);
+
+    freetree234(edgescpy);
+}
+
+/*
  * A node of a graph isomorphism search tree
  */
 typedef struct node node;
@@ -2814,7 +2836,7 @@ static char *interpret_move(const game_state *state, game_ui *ui,
                     ui->newpt.y));
                 return UI_UPDATE;
             }
-            else if (state->base->vtcs[bestpt_idx].deg == 0)
+            else
             {
                 ui->current_move = MOVE_DELPOINT;
                 ui->delpt = bestpt_idx;
@@ -2842,7 +2864,7 @@ static char *interpret_move(const game_state *state, game_ui *ui,
              * Check whether there is at least one edge with an edge heuristic smaller
              * than the treshold. If yes => game_ui requires update.
              */
-            if (beste_heur < EDGE_TRESHOLD)
+            if (beste_heur < EDGE_TRESHOLD && button == RIGHT_BUTTON)
             {
                 ui->current_move = MOVE_DELEDGE;
                 ui->deledge_src = beste.src;
@@ -3001,10 +3023,9 @@ static game_state *execute_move(const game_state *state, const char *move)
 {
     int off;
     int idx;
-    int src, tgt;
     int current_move;
     long grid_size = COORDLIMIT(state->params.n_base) * COORDUNIT;
-    long x, y;
+    point p;
     vertex v;
     edge e;
     game_state* ret;
@@ -3043,10 +3064,10 @@ static game_state *execute_move(const game_state *state, const char *move)
         {
             case MOVE_DRAGPOINT:
                 idx = -1;
-                x = y = -1;
-                if (sscanf(move, "%d-%ld-%ld;%n", &idx, &x, &y, &off) != 3
+                p.x = p.y = -1;
+                if (sscanf(move, "%d-%ld-%ld;%n", &idx, &p.x, &p.y, &off) != 3
                     || idx < 0 || idx >= state->params.n_base
-                    || x < 0 || x > grid_size || y < 0 || y > grid_size)
+                    || p.x < 0 || p.x > grid_size || p.y < 0 || p.y > grid_size)
                 {
                     LOG(("Failed to scan drag move,"));
                     if (idx >= 0) LOG((" point %d\n", idx));
@@ -3056,64 +3077,60 @@ static game_state *execute_move(const game_state *state, const char *move)
                 }
 
                 /* Assign the new coordinates to the dragged point */
-                ret->base->points[idx].x = x;
-                ret->base->points[idx].y = y;
-                LOG(("Dragged point %d to position x:%ld, y:%ld\n", idx, x, y));
+                ret->base->points[idx].x = p.x;
+                ret->base->points[idx].y = p.y;
+                LOG(("Dragged point %d to position x:%ld, y:%ld\n", idx, p.x, p.y));
 
                 move += off;
                 break;
             case MOVE_CONTREDGE:
-                src = tgt = -1;
-                if (sscanf(move, "%d-%d;%n", &src, &tgt, &off) != 2
-                    || src == tgt || !isedge(ret->base->edges, src, tgt))
+                e.src = e.tgt = -1;
+                if (sscanf(move, "%d-%d;%n", &e.src, &e.tgt, &off) != 2
+                    || e.src == e.tgt || !isedge(ret->base->edges, e.src, e.tgt))
                 {
                     LOG(("Failed to scan contraction move,"));
-                    if (src >= 0 && tgt >= 0) LOG((" edge %d-%d\n", src, tgt));
+                    if (e.src >= 0 && e.tgt >= 0) LOG((" edge %d-%d\n", e.src, e.tgt));
                     else LOG(("\n"));
                     free_game(ret);
                     return NULL;
                 }
                 
                 /* Contract the edge between src and tgt */
-                contract_edge(ret->base, src, tgt);
-                LOG(("Contracted edge %d-%d\n", src, tgt));
+                contract_edge(ret->base, e.src, e.tgt);
+                LOG(("Contracted edge %d-%d\n", e.src, e.tgt));
                 if (ret->solved) ret->solved = false;
 
                 move += off;
                 break;
             case MOVE_DELPOINT:
-                idx = -1;
-                if (sscanf(move, "%d;%n", &idx, &off) != 1
-                    || (idx < 0 && idx >= state->params.n_base))
+                if (sscanf(move, "%d;%n", &v.idx, &off) != 1
+                    || (v.idx < 0 && v.idx >= state->params.n_base))
                 {
                     LOG(("Failed to scan point deletion move,"));
-                    if (idx >= 0) LOG((" point %d\n", idx));
+                    if (v.idx >= 0) LOG((" point %d\n", v.idx));
                     else LOG(("\n"));
                     free_game(ret);
                     return NULL;
                 }
 
-                v.idx = idx;
-                del234(ret->base->vertices, &v);
+                delete_vertex(ret->base, v);
                 LOG(("Deleted point %d\n", v.idx));
                 if (ret->solved) ret->solved = false;
 
                 move += off;
                 break;
             case MOVE_DELEDGE:
-                src = tgt = -1;
-                if (sscanf(move, "%d-%d;%n", &src, &tgt, &off) != 2
-                    || src == tgt || !isedge(ret->base->edges, src, tgt))
+                e.src = e.tgt = -1;
+                if (sscanf(move, "%d-%d;%n", &e.src, &e.tgt, &off) != 2
+                    || e.src == e.tgt || !isedge(ret->base->edges, e.src, e.tgt))
                 {
                     LOG(("Failed to scan edge deletion move,"));
-                    if (src >= 0 && tgt >= 0) LOG((" edge %d-%d\n", src, tgt));
+                    if (e.src >= 0 && e.tgt >= 0) LOG((" edge %d-%d\n", e.src, e.tgt));
                     else LOG(("\n"));
                     free_game(ret);
                     return NULL;
                 }
 
-                e.src = src;
-                e.tgt = tgt;
                 delete_edge(ret->base, e);
                 LOG(("Deleted edge %d-%d\n", e.src, e.tgt));
                 if (ret->solved) ret->solved = false;
