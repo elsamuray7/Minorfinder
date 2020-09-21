@@ -834,19 +834,26 @@ static void make_K_5(tree234* edges, vertex* vertices, int n)
  */
 static void make_K_33(tree234* edges, vertex* vertices, int n)
 {
-    int i, j;
+    int i;
 
 #if DEBUG
     assert(n == 6);
 #endif
-    for (i = 0; i < n / 2; i++)
+    addedge(edges, 5, 2);
+    addedge(edges, 5, 3);
+    addedge(edges, 5, 4);
+
+    addedge(edges, 0, 2);
+    addedge(edges, 0, 3);
+    addedge(edges, 0, 4);
+
+    addedge(edges, 1, 2);
+    addedge(edges, 1, 3);
+    addedge(edges, 1, 4);
+
+    for (i = 0; i < n; i++)
     {
-        for (j = n / 2; j < n; j++)
-        {
-            addedge(edges, i, j);
-            vertices[i].deg++;
-            vertices[j].deg++;
-        }
+        vertices[i].deg = 3;
     }
 }
 
@@ -1849,7 +1856,7 @@ static void contract_edge(graph* graph, int dom, int rec)
 #if DEBUG
     assert(graph->vtcs[rec].idx == rec);
 #endif
-    for (i = 0; (e = delpos234(graph->edges, 0)) != NULL; i++) sfree(e);
+    while((e = delpos234(graph->edges, 0)) != NULL) sfree(e);
     freetree234(graph->edges);
     graph->edges = edgescpy;
 }
@@ -1859,8 +1866,11 @@ static void contract_edge(graph* graph, int dom, int rec)
  */
 static void delete_edge(graph* graph, edge e)
 {
+    edge* _e;
+
     /* delete the edge */
-    del234(graph->edges, &e);
+    _e = del234(graph->edges, &e);
+    sfree(_e);
 
     /* update the involved vertices */
     del234(graph->vertices, graph->vtcs + e.src);
@@ -1888,8 +1898,9 @@ static void delete_vertex(graph* graph, vertex v)
     }
 
     /* delete the vertex */
-    del234(graph->vertices, &v);
+    del234(graph->vertices, &graph->vtcs[v.idx]);
 
+    while((e = delpos234(edgescpy, 0)) != NULL) sfree(e);
     freetree234(edgescpy);
 }
 
@@ -2464,6 +2475,7 @@ static char* solve_bruteforce(const game_state* currstate, game_state** solvedst
                 strcpy(moves+1, buf);
                 if (oldmoves)
                     strcpy(moves + movesoff + 1, oldmoves);
+                sfree(oldmoves);
                 LOG(("Bruteforce solver - newmoves: %s\n", moves));
                 (*moveslen) += movesoff;
                 return moves;
@@ -2507,9 +2519,10 @@ static char *solve_game(const game_state *state, const game_state *currstate,
 
     point* pt;
     vertex* vx;
-    edge* e;
+    mapping* m;
 
     game_state* solved;
+    tree234* solution;
 
     /*
      * Delete all edges that are incident to the remaining points and then delete
@@ -2531,23 +2544,6 @@ static char *solve_game(const game_state *state, const game_state *currstate,
     ret[retlen++] = 'S';
 
     solved = dup_game(currstate);
-    for (i = 0; (e = index234(currstate->base->edges, i)) != NULL; i++)
-    {
-        if (e->tgt >= n_nsub)
-        {
-            retoff = sprintf(buf, "%d:%d-%d;", MOVE_DELEDGE, e->src, e->tgt);
-            if (retlen + retoff >= retsize)
-            {
-                retsize = retlen + retoff + 256;
-                ret = sresize(ret, retsize, char);
-            }
-            strcpy(ret + retlen, buf);
-            retlen += retoff;
-
-            delete_edge(solved->base, *e);
-            LOG(("Deleted edge %d-%d\n", e->src, e->tgt));
-        }
-    }
     for (i = n_nsub; i < n_base; i++)
     {
         vx = solved->base->vtcs + i;
@@ -2563,7 +2559,7 @@ static char *solve_game(const game_state *state, const game_state *currstate,
             retlen += retoff;
 
             LOG(("Number of visible vertices is %d\n", count234(solved->base->vertices)));
-            del234(solved->base->vertices, vx);
+            delete_vertex(solved->base, *vx);
             LOG(("Deleted point %d\n", vx->idx));
             LOG(("Number of visible vertices is %d\n", count234(solved->base->vertices)));
         }
@@ -2617,9 +2613,9 @@ static char *solve_game(const game_state *state, const game_state *currstate,
      * performance wise but we can ensure that if we are able to find a solution we will
      * always find it.
      */
-    if (!(solved->solved = isomorphism_degheuristic(solved->minor, solved->base, NULL)))
+    solution = NULL;
+    if (!(solved->solved = isomorphism_degheuristic(solved->minor, solved->base, &solution)))
     {
-        tree234* solution = NULL;
 #ifdef BENCHMARKS
         assert(!isomorphism_bruteforce(solved->minor, solved->base));
 #endif
@@ -2630,36 +2626,42 @@ static char *solve_game(const game_state *state, const game_state *currstate,
         retsize = 256;
         retlen = 0;
         clock_t begin = clock();
-        if ((ret = solve_bruteforce(currstate, &solved, &solution, &retsize, &retlen, begin, 100)))
+        if (!(ret = solve_bruteforce(currstate, &solved, &solution, &retsize, &retlen, begin, 100)))
+        {
+            sfree(solved);
+            *error = "Solution not known for the current puzzle state";
+            return NULL;
+        }
+        else
         {
             LOG(("Used bruteforce solver to solve puzzle\n"));
-            for (i = 0; (vx = index234(solved->base->vertices, i)) != NULL; i++)
-            {
-                mapping mvx;
-                mvx.key = vx->idx;
-                mvx.value = -1;
-                mvx.value = ((mapping*) find234(solution, &mvx, NULL))->value;
-                LOG(("Vertex %d in the base graph corresponds to vertex %d in the minor\n", vx->idx,
-                    mvx.value));
-                pt = solved->base->points + vx->idx;
-                pt->x = solved->minor->points[mvx.value].x;
-                pt->y = solved->minor->points[mvx.value].y;
-                pt->d = 1;
-                retoff = sprintf(buf, "%d:%d-%ld-%ld;", MOVE_DRAGPOINT, vx->idx, pt->x, pt->y);
-                if (retlen + retoff >= retsize)
-                {
-                    retsize = retlen + retoff + 256;
-                    ret = sresize(ret, retsize, char);
-                }
-                strcpy(ret + retlen, buf);
-                retlen += retoff;
-            }
-            return ret;
         }
-        *error = "Solution not known for the current puzzle state";
-        return NULL;
     }
 
+    for (i = 0; (vx = index234(solved->base->vertices, i)) != NULL; i++)
+    {
+        mapping mvx;
+        mvx.key = vx->idx;
+        mvx.value = -1;
+        mvx.value = ((mapping*) find234(solution, &mvx, NULL))->value;
+        LOG(("Vertex %d in the base graph corresponds to vertex %d in the minor\n", vx->idx,
+            mvx.value));
+        pt = solved->base->points + vx->idx;
+        pt->x = solved->minor->points[mvx.value].x;
+        pt->y = solved->minor->points[mvx.value].y;
+        pt->d = 1;
+        retoff = sprintf(buf, "%d:%d-%ld-%ld;", MOVE_DRAGPOINT, vx->idx, pt->x, pt->y);
+        if (retlen + retoff >= retsize)
+        {
+            retsize = retlen + retoff + 256;
+            ret = sresize(ret, retsize, char);
+        }
+        strcpy(ret + retlen, buf);
+        retlen += retoff;
+    }
+
+    while ((m = delpos234(solution, 0)) != NULL) sfree(m);
+    freetree234(solution);
     free_game(solved);
     
     return ret;
@@ -2682,16 +2684,16 @@ struct game_ui {
     /* index of the drag point */
     int dragpt;
 
-    /* index of the point to delete */
-    int delpt;
+    /* index of vertex to delete */
+    int delvx;
 
     /* index of the resulting point of the merge - the dominant point */
     int mergept_dom;
     /* index of the recessive point */
     int mergept_rec;
 
-    /* indices of the vertices that are incident to the edge that should be deleted */
-    int deledge_src, deledge_tgt;
+    /* edge that should be deleted */
+    edge deledge;
 
     /* the currently ongoing move */
     enum move current_move;
@@ -2703,11 +2705,11 @@ static game_ui *new_ui(const game_state *state)
     game_ui* ret = snew(game_ui);
     ret->newpt.d = 1;
     ret->dragpt = -1;
-    ret->delpt = -1;
+    ret->delvx = -1;
     ret->mergept_dom = -1;
     ret->mergept_rec = -1;
-    ret->deledge_src = -1;
-    ret->deledge_tgt = -1;
+    ret->deledge.src = -1;
+    ret->deledge.tgt = -1;
     ret->current_move = MOVE_IDLE;
 
     return ret;
@@ -2739,11 +2741,11 @@ static void game_changed_state(game_ui *ui, const game_state *oldstate,
             ui->dragpt = -1;
             break;
         case MOVE_DELPOINT:
-            ui->delpt = -1;
+            ui->delvx = -1;
             break;
         case MOVE_DELEDGE:
-            ui->deledge_src = -1;
-            ui->deledge_tgt = -1;
+            ui->deledge.src = -1;
+            ui->deledge.tgt = -1;
             break;
         case MOVE_IDLE:
         default:;
@@ -2767,7 +2769,7 @@ struct game_drawstate {
 
 #define POINT_TRESHOLD square(HOVER_POINTRADIUS)
 #define OVERLAYPOINT_TRESHOLD_MOVEINT square(2 * POINTRADIUS)
-#define EDGE_TRESHOLD 2
+#define EDGE_TRESHOLD 2.0
 
 /* heuristic to determine whether a point has been clicked */
 #define point_heuristic(px, py, cx, cy) (square((px) - (cx)) + square((py) - (cy)))
@@ -2778,9 +2780,9 @@ struct game_drawstate {
 static double edge_heuristic(long esx, long esy, long etx, long ety,
                             long cx, long cy)
 {
-    long dist_st = squarert(square(etx - esx) + square(ety - esy));
-    long dist_sc = squarert(square(cx - esx) + square(cy - esy));
-    long dist_ct = squarert(square(etx - cx) + square(ety - cy));
+    double dist_st = sqrt(square(etx - esx) + square(ety - esy));
+    double dist_sc = sqrt(square(cx - esx) + square(cy - esy));
+    double dist_ct = sqrt(square(etx - cx) + square(ety - cy));
     return dist_sc + dist_ct - dist_st;
 }
 
@@ -2857,12 +2859,12 @@ static char *interpret_move(const game_state *state, game_ui *ui,
             else
             {
                 ui->current_move = MOVE_DELPOINT;
-                ui->delpt = bestpt_idx;
-                LOG(("Selected point %d to delete\n", ui->delpt));
+                ui->delvx = bestpt_idx;
+                LOG(("Selected point %d to delete\n", ui->delvx));
                 return UI_UPDATE;
             }
         }
-        else
+        else if (button == RIGHT_BUTTON)
         {
             /*
             * Get the index of the edge with the shortest edge heuristic. Do only take edges
@@ -2874,6 +2876,8 @@ static char *interpret_move(const game_state *state, game_ui *ui,
                                         pts[e->tgt].y, realx, realy);
                 if (eheur < beste_heur)
                 {
+                    LOG(("New nearest edge %d-%d with distance %lf to the mouse position\n",
+                        e->src, e->tgt, eheur));
                     beste_heur = eheur;
                     beste = *e;
                 }
@@ -2885,16 +2889,16 @@ static char *interpret_move(const game_state *state, game_ui *ui,
             if (beste_heur < EDGE_TRESHOLD && button == RIGHT_BUTTON)
             {
                 ui->current_move = MOVE_DELEDGE;
-                ui->deledge_src = beste.src;
-                ui->deledge_tgt = beste.tgt;
-                LOG(("Selected edge %d-%d to delete\n", ui->deledge_src, ui->deledge_tgt));
+                ui->deledge.src = beste.src;
+                ui->deledge.tgt = beste.tgt;
+                LOG(("Selected edge %d-%d to delete\n", ui->deledge.src, ui->deledge.tgt));
                 return UI_UPDATE;
             }
         }
     }
     else if (IS_MOUSE_DRAG(button))
     {
-        if (ui->current_move <= MOVE_CONTREDGE)
+        if (ui->current_move > MOVE_IDLE && ui->current_move <= MOVE_CONTREDGE)
         {
             ui->newpt.x = realx;
             ui->newpt.y = realy;
@@ -2994,15 +2998,15 @@ static char *interpret_move(const game_state *state, game_ui *ui,
                     || y < 0 || y > ds->height)
                 {
                     ui->current_move = MOVE_IDLE;
-                    ui->delpt = -1;
+                    ui->delvx = -1;
                     LOG(("Unselected point to delete\n"));
                     return UI_UPDATE;
                 }
                 else
                 {
                     char buf[80];
-                    sprintf(buf, "%d:%d;", ui->current_move, ui->delpt);
-                    LOG(("Deleting point %d\n", ui->delpt));
+                    sprintf(buf, "%d:%d;", ui->current_move, ui->delvx);
+                    LOG(("Deleting point %d\n", ui->delvx));
                     return dupstr(buf);
                 }
             /*
@@ -3015,17 +3019,17 @@ static char *interpret_move(const game_state *state, game_ui *ui,
                     || y < 0 || y > ds->height)
                 {
                     ui->current_move = MOVE_IDLE;
-                    ui->deledge_src = -1;
-                    ui->deledge_tgt = -1;
+                    ui->deledge.src = -1;
+                    ui->deledge.tgt = -1;
                     LOG(("Unselected edge to delete\n"));
                     return UI_UPDATE;
                 }
                 else
                 {
                     char buf[80];
-                    sprintf(buf, "%d:%d-%d;", ui->current_move, ui->deledge_src, ui->deledge_tgt);
-                    LOG(("Deleting edge between vertices %d and %d\n", ui->deledge_src,
-                        ui->deledge_tgt));
+                    sprintf(buf, "%d:%d-%d;", ui->current_move, ui->deledge.src, ui->deledge.tgt);
+                    LOG(("Deleting edge between vertices %d and %d\n", ui->deledge.src,
+                        ui->deledge.tgt));
                     return dupstr(buf);
                 }
             case MOVE_IDLE:
@@ -3443,7 +3447,7 @@ static void game_redraw(drawing *dr, game_drawstate *ds,
             ptgt.y = etgt->y * ds->tilesize / COORDUNIT;
         }
         draw_line(dr, psrc.x, psrc.y, ptgt.x, ptgt.y,
-                    (e->src == ui->deledge_src && e->tgt == ui->deledge_tgt) ?
+                    (e->src == ui->deledge.src && e->tgt == ui->deledge.tgt) ?
                     COL_DELEDGE : (hide ? COL_HIDEEDGE : COL_EDGE));
     }
     /* Draw the base graph points in the intended grid */
@@ -3478,7 +3482,7 @@ static void game_redraw(drawing *dr, game_drawstate *ds,
         else
             r = POINTRADIUS * ds->tilesize / COORDUNIT;
         draw_circle(dr, p.x, p.y, r,
-                    (vx->idx == ui->delpt) ? COL_DELPOINT :
+                    (vx->idx == ui->delvx) ? COL_DELPOINT :
                     ( hide ? COL_HIDEPOINT :
 #if DEBUG
                     ((vx->idx < state->params.n_min * (state->params.n_base
