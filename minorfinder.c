@@ -19,7 +19,7 @@
 #include "tree234.h"
 
 /* debug mode */
-#define DEBUG false
+#define DEBUG true
 
 #define BENCHMARKS
 
@@ -1704,7 +1704,7 @@ static game_state *new_game(midend *me, const game_params *params,
 
     grid base_grid = {
         minor_grid.x_off + minor_grid.relsize * coord_lim,
-        minor_grid.y_off + minor_grid.relsize * coord_lim,
+        0,
         1.0F
     };
     state->base->grid = base_grid;
@@ -2801,6 +2801,8 @@ static char *interpret_move(const game_state *state, game_ui *ui,
     long realx = (x * COORDUNIT / ds->tilesize) - state->base->grid.x_off;
     long realy = y * COORDUNIT / ds->tilesize;
 
+    long real_coord_lim = ds->coord_lim * COORDUNIT / ds->tilesize;
+
     point* pt;
     point* pts = state->base->points;
     vertex* vx;
@@ -2946,10 +2948,8 @@ static char *interpret_move(const game_state *state, game_ui *ui,
              * the drag. If no => make move, else => discard and update game_ui.
              */
             case MOVE_DRAGPOINT:
-                if (ui->newpt.x < 2 * POINTRADIUS
-                    || ui->newpt.x + (2 * POINTRADIUS) > ds->coord_lim * COORDUNIT / ds->tilesize
-                    || ui->newpt.y < 2 * POINTRADIUS
-                    || ui->newpt.y + (2 * POINTRADIUS) > ds->coord_lim * COORDUNIT / ds->tilesize)
+                if (ui->newpt.x < 2 * POINTRADIUS || ui->newpt.x + (2 * POINTRADIUS) > real_coord_lim
+                    || ui->newpt.y < 2 * POINTRADIUS || ui->newpt.y + (2 * POINTRADIUS) > real_coord_lim)
                 {
                     ui->current_move = MOVE_IDLE;
                     ui->dragpt = -1;
@@ -2971,8 +2971,8 @@ static char *interpret_move(const game_state *state, game_ui *ui,
              * game_ui.
              */
             case MOVE_CONTREDGE:
-                if (x < state->base->grid.x_off || x > state->base->grid.x_off + ds->coord_lim
-                    || y < 0 || y > ds->height)
+                if (realx < state->base->grid.x_off || realx > state->base->grid.x_off + real_coord_lim
+                    || realy < 0 || realy > real_coord_lim)
                 {
                     ui->current_move = MOVE_IDLE;
                     ui->mergept_dom = -1;
@@ -2994,8 +2994,8 @@ static char *interpret_move(const game_state *state, game_ui *ui,
              * game_ui.
              */
             case MOVE_DELPOINT:
-                if (x < state->base->grid.x_off || x > state->base->grid.x_off + ds->coord_lim
-                    || y < 0 || y > ds->height)
+                if (realx < state->base->grid.x_off || realx > state->base->grid.x_off + real_coord_lim
+                    || realy < 0 || realy > real_coord_lim)
                 {
                     ui->current_move = MOVE_IDLE;
                     ui->delvx = -1;
@@ -3015,8 +3015,8 @@ static char *interpret_move(const game_state *state, game_ui *ui,
              * game_ui.
              */
             case MOVE_DELEDGE:
-                if (x < state->base->grid.x_off || x > state->base->grid.x_off + ds->coord_lim
-                    || y < 0 || y > ds->height)
+                if (realx < state->base->grid.x_off || realx > state->base->grid.x_off + real_coord_lim
+                    || realy < 0 || realy > real_coord_lim)
                 {
                     ui->current_move = MOVE_IDLE;
                     ui->deledge.src = -1;
@@ -3325,6 +3325,15 @@ static void game_redraw(drawing *dr, game_drawstate *ds,
     int i;
     int bg_color;
     float r_anim;
+
+    int mxoff = state->minor->grid.x_off;
+    int myoff = state->minor->grid.y_off;
+    float mrelsize = state->minor->grid.relsize;
+
+    int bxoff = state->base->grid.x_off;
+    int byoff = state->base->grid.y_off;
+    float brelsize = state->base->grid.relsize;
+
     edge* e;
     vertex* vx;
     point* esrc;
@@ -3355,9 +3364,9 @@ static void game_redraw(drawing *dr, game_drawstate *ds,
     draw_rect(dr, 0, 0, ds->width, ds->height, bg_color);
     draw_rect_outline(dr, 0, 0, ds->width, ds->height, COL_OUTLINE);
 
-    draw_rect_outline(dr, state->minor->grid.x_off, state->minor->grid.y_off,
-                    ds->coord_lim * state->minor->grid.relsize,
-                    ds->coord_lim * state->minor->grid.relsize, COL_OUTLINE);
+    /* Draw the minor grid outline */
+    draw_rect_outline(dr, mxoff, myoff, ds->coord_lim * mrelsize,
+                    ds->coord_lim * mrelsize, COL_OUTLINE);
     
     /* Draw the minor edges in the intended grid */
     pts = state->minor->points;
@@ -3366,12 +3375,10 @@ static void game_redraw(drawing *dr, game_drawstate *ds,
         point psrc, ptgt;
         esrc = pts + e->src;
         etgt = pts + e->tgt;
-        psrc.x = ((esrc->x + state->minor->grid.x_off) * state->minor->grid.relsize)
-                * ds->tilesize / COORDUNIT;
-        psrc.y = (esrc->y * state->minor->grid.relsize) * ds->tilesize / COORDUNIT;
-        ptgt.x = ((etgt->x + state->minor->grid.x_off) * state->minor->grid.relsize)
-                * ds->tilesize / COORDUNIT;
-        ptgt.y = (etgt->y * state->minor->grid.relsize) * ds->tilesize / COORDUNIT;
+        psrc.x = (esrc->x + mxoff) * mrelsize * ds->tilesize / COORDUNIT;
+        psrc.y = (esrc->y + myoff) * mrelsize * ds->tilesize / COORDUNIT;
+        ptgt.x = (etgt->x + mxoff) * mrelsize * ds->tilesize / COORDUNIT;
+        ptgt.y = (etgt->y + myoff) * mrelsize * ds->tilesize / COORDUNIT;
         draw_line(dr, psrc.x, psrc.y, ptgt.x, ptgt.y, COL_EDGE);
     }
     /* Draw the minor points in the intended grid */
@@ -3379,9 +3386,8 @@ static void game_redraw(drawing *dr, game_drawstate *ds,
     {
         long r;
         point p;
-        p.x = ((pts[vx->idx].x + state->minor->grid.x_off) * state->minor->grid.relsize)
-                * ds->tilesize / COORDUNIT;
-        p.y = (pts[vx->idx].y * state->minor->grid.relsize) * ds->tilesize / COORDUNIT;
+        p.x = (pts[vx->idx].x + mxoff) * mrelsize * ds->tilesize / COORDUNIT;
+        p.y = (pts[vx->idx].y + myoff) * mrelsize * ds->tilesize / COORDUNIT;
         r = POINTRADIUS * ds->tilesize / COORDUNIT;
         draw_circle(dr, p.x, p.y, r, COL_MINORPOINT, COL_POINTOUTLINE);
     }
@@ -3408,8 +3414,8 @@ static void game_redraw(drawing *dr, game_drawstate *ds,
          */
         if (ui->dragpt == e->src)
         {
-            psrc.x = (ui->newpt.x + state->base->grid.x_off) * ds->tilesize / COORDUNIT;
-            psrc.y = ui->newpt.y * ds->tilesize / COORDUNIT;
+            psrc.x = (ui->newpt.x + bxoff) * brelsize * ds->tilesize / COORDUNIT;
+            psrc.y = (ui->newpt.y + byoff) * brelsize * ds->tilesize / COORDUNIT;
         }
         /*
          * Check whether there is a solve animation ongoing. Calculate the
@@ -3418,33 +3424,33 @@ static void game_redraw(drawing *dr, game_drawstate *ds,
         else if (oldstate)
         {
             oesrc = oldstate->base->points + e->src;
-            psrc.x = (oesrc->x + ((float) (esrc->x - oesrc->x) * r_anim) + state->base->grid.x_off)
-                    * ds->tilesize / COORDUNIT;
-            psrc.y = (oesrc->y + ((float) (esrc->y - oesrc->y) * r_anim)) * ds->tilesize
-                    / COORDUNIT;
+            psrc.x = (oesrc->x + ((float) (esrc->x - oesrc->x) * r_anim) + bxoff)
+                    * brelsize * ds->tilesize / COORDUNIT;
+            psrc.y = (oesrc->y + ((float) (esrc->y - oesrc->y) * r_anim) + byoff)
+                    * brelsize * ds->tilesize / COORDUNIT;
         }
         else
         {
-            psrc.x = (esrc->x + state->base->grid.x_off) * ds->tilesize / COORDUNIT;
-            psrc.y = esrc->y * ds->tilesize / COORDUNIT;
+            psrc.x = (esrc->x + bxoff) * brelsize * ds->tilesize / COORDUNIT;
+            psrc.y = (esrc->y + byoff) * brelsize * ds->tilesize / COORDUNIT;
         }
         if (ui->dragpt == e->tgt)
         {
-            ptgt.x = (ui->newpt.x + state->base->grid.x_off) * ds->tilesize / COORDUNIT;
-            ptgt.y = ui->newpt.y * ds->tilesize / COORDUNIT;
+            ptgt.x = (ui->newpt.x + bxoff) * brelsize * ds->tilesize / COORDUNIT;
+            ptgt.y = (ui->newpt.y + byoff) * brelsize * ds->tilesize / COORDUNIT;
         }
         else if (oldstate)
         {
             oetgt = oldstate->base->points + e->tgt;
-            ptgt.x = (oetgt->x + ((float) (etgt->x - oetgt->x) * r_anim) + state->base->grid.x_off)
-                    * ds->tilesize / COORDUNIT;
-            ptgt.y = (oetgt->y + ((float) (etgt->y - oetgt->y) * r_anim)) * ds->tilesize
-                    / COORDUNIT;
+            ptgt.x = (oetgt->x + ((float) (etgt->x - oetgt->x) * r_anim) + bxoff)
+                    * brelsize * ds->tilesize / COORDUNIT;
+            ptgt.y = (oetgt->y + ((float) (etgt->y - oetgt->y) * r_anim) + byoff)
+                    * brelsize * ds->tilesize / COORDUNIT;
         }
         else
         {
-            ptgt.x = (etgt->x + state->base->grid.x_off) * ds->tilesize / COORDUNIT;
-            ptgt.y = etgt->y * ds->tilesize / COORDUNIT;
+            ptgt.x = (etgt->x + bxoff) * brelsize * ds->tilesize / COORDUNIT;
+            ptgt.y = (etgt->y + byoff) * brelsize * ds->tilesize / COORDUNIT;
         }
         draw_line(dr, psrc.x, psrc.y, ptgt.x, ptgt.y,
                     (e->src == ui->deledge.src && e->tgt == ui->deledge.tgt) ?
@@ -3468,21 +3474,21 @@ static void game_redraw(drawing *dr, game_drawstate *ds,
         else if (oldstate)
         {
             op = oldstate->base->points + vx->idx;
-            p.x = (op->x + ((float) (pts[vx->idx].x - op->x) * r_anim) + state->base->grid.x_off)
-                    * ds->tilesize / COORDUNIT;
-            p.y = (op->y + ((float) (pts[vx->idx].y - op->y) * r_anim)) * ds->tilesize / COORDUNIT;
+            p.x = (op->x + ((float) (pts[vx->idx].x - op->x) * r_anim) + bxoff)
+                    * brelsize * ds->tilesize / COORDUNIT;
+            p.y = (op->y + ((float) (pts[vx->idx].y - op->y) * r_anim) + byoff)
+                    * brelsize * ds->tilesize / COORDUNIT;
         }
         else
         {
-            p.x = (pts[vx->idx].x + state->base->grid.x_off) * ds->tilesize / COORDUNIT;
-            p.y = pts[vx->idx].y * ds->tilesize / COORDUNIT;
+            p.x = (pts[vx->idx].x + bxoff) * brelsize * ds->tilesize / COORDUNIT;
+            p.y = (pts[vx->idx].y + byoff) * brelsize * ds->tilesize / COORDUNIT;
         }
         if (vx->idx == ui->mergept_dom)
             r = HOVER_POINTRADIUS * ds->tilesize / COORDUNIT;
         else
             r = POINTRADIUS * ds->tilesize / COORDUNIT;
-        draw_circle(dr, p.x, p.y, r,
-                    (vx->idx == ui->delvx) ? COL_DELPOINT :
+        draw_circle(dr, p.x, p.y, r, (vx->idx == ui->delvx) ? COL_DELPOINT :
                     ( hide ? COL_HIDEPOINT :
 #if DEBUG
                     ((vx->idx < state->params.n_min * (state->params.n_base
@@ -3501,8 +3507,8 @@ static void game_redraw(drawing *dr, game_drawstate *ds,
     {
         long r;
         point p;
-        p.x = (ui->newpt.x + state->base->grid.x_off) * ds->tilesize / COORDUNIT;
-        p.y = ui->newpt.y * ds->tilesize / COORDUNIT;
+        p.x = (ui->newpt.x + bxoff) * brelsize * ds->tilesize / COORDUNIT;
+        p.y = (ui->newpt.y + byoff) * brelsize * ds->tilesize / COORDUNIT;
         r = POINTRADIUS * ds->tilesize / COORDUNIT;
         draw_circle(dr, p.x, p.y, r, COL_DRAGPOINT, COL_POINTOUTLINE);
     }
