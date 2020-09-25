@@ -19,7 +19,7 @@
 #include "tree234.h"
 
 /* debug mode */
-#define DEBUG true
+#define DEBUG false
 
 #define BENCHMARKS
 
@@ -832,7 +832,7 @@ static void make_K_5(tree234* edges, vertex* vertices, int n)
 /*
  * Add edges to a graph with 6 vertices such that it becomes the K_33
  */
-static void make_K_33(tree234* edges, vertex* vertices, int n)
+static void make_K_33_edges(tree234* edges, vertex* vertices, int n)
 {
     int i;
 
@@ -854,6 +854,69 @@ static void make_K_33(tree234* edges, vertex* vertices, int n)
     for (i = 0; i < n; i++)
     {
         vertices[i].deg = 3;
+    }
+}
+
+/*
+ * These parameters are highly sensitive, changing them may cause problems when
+ * generating new game descriptions.
+ */
+#define COORDMARGIN 1
+#define COORDLIMIT(n) ((n) + (2 * COORDMARGIN))
+#define COORDUNIT 16
+
+/*
+ * We use bigger values for counter and denominator here because we also want
+ * appropriate results for small n.
+ */
+#define MINORRADIUS(n) ((10 * (n)) / 30)
+#define SUBGRAPH_DISTANCE (4 * POINTRADIUS)
+#define SUBGRAPH_POINTENTROPY 2
+#define OVERLAYPOINT_TRESHOLD_GAMEGEN square(4 * POINTRADIUS)
+
+/*
+ * Arrange the points of a K_33 in two rows of three points each, such that it
+ * becomes the default presentation of the K_33.
+ */
+static void make_K_33_points(point* points, long lim, int n)
+{
+    int i;
+
+#if DEBUG
+    assert(n == 6);
+#endif
+    for (i = 0; i < n; i++)
+    {
+        switch (i)
+        {
+            case 0:
+            case 3:
+                points[i].x = lim * COORDUNIT / 2;
+                break;
+            case 1:
+            case 2:
+                points[i].x = lim * COORDUNIT / 5;
+                break;
+            case 4:
+            case 5:
+                points[i].x = lim * COORDUNIT * 4 / 5;
+                break;
+            default:;
+        }
+        switch (i)
+        {
+            case 5:
+            case 0:
+            case 1:
+                points[i].y = lim * COORDUNIT / 4;
+                break;
+            case 2:
+            case 3:
+            case 4:
+                points[i].y = lim * COORDUNIT * 3 / 4;
+                break;
+            default:;
+        }
     }
 }
 
@@ -883,19 +946,6 @@ static int eextcmp(void *av, void *bv)
 {
     return eextcmpC(av, bv);
 }
-
-/*
- * These parameters are highly sensitive, changing them may cause problems when
- * generating new game descriptions.
- */
-#define COORDMARGIN 1
-#define COORDLIMIT(n) ((n) + (2 * COORDMARGIN))
-#define COORDUNIT 16
-
-#define MINORRADIUS(n) ((5 * (n)) / 15)
-#define SUBGRAPH_DISTANCE (6 * POINTRADIUS)
-#define SUBGRAPH_POINTENTROPY 2
-#define OVERLAYPOINT_TRESHOLD_GAMEGEN square(4 * POINTRADIUS)
 
 /*
  * Add edges to the remaining points. Determine for every remaining point the three shortest
@@ -1102,20 +1152,28 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     coord_lim = COORDLIMIT(n_base);
     circle_rad = MINORRADIUS(n_base);
 
-    /* Arrange the minor points in a circle with radius circle_rad */
     tmp = coord_lim - (2 * COORDMARGIN);
     pts_min = snewn(n_min, point);
-    for (i = 0; i < n_min; i++)
+    /* Arrange the minor points in a circle with radius circle_rad */
+    if (params->mode != WAGNER || n_min < 6)
     {
-        double angle = ((double) i * 2.0 * PI) / (double) n_min;
-        pt = pts_min + i;
-        pt->x = (((double) tmp / 2.0) + ((double) circle_rad * sin(angle)) + COORDMARGIN)
-                * COORDUNIT;
-        pt->y = (((double) tmp / 2.0) + ((double) circle_rad * cos(angle)) + COORDMARGIN)
-                * COORDUNIT;
-        pt->d = 1;
-        LOG(("Assigned coordinates x:%ld, y:%ld and denominator %ld to minor point %ld\n",
-            pt->x, pt->y, pt->d, i));
+        for (i = 0; i < n_min; i++)
+        {
+            double angle = ((double) i * 2.0 * PI) / (double) n_min;
+            pt = pts_min + i;
+            pt->x = (((double) tmp / 2.0) + ((double) circle_rad * sin(angle)) + COORDMARGIN)
+                    * COORDUNIT;
+            pt->y = (((double) tmp / 2.0) + ((double) circle_rad * cos(angle)) + COORDMARGIN)
+                    * COORDUNIT;
+            pt->d = 1;
+            LOG(("Assigned coordinates x:%ld, y:%ld and denominator %ld to minor point %ld\n",
+                pt->x, pt->y, pt->d, i));
+        }
+    }
+    /* Arrange the minor points in two rows of three points each */
+    else
+    {
+        make_K_33_points(pts_min, coord_lim, n_min);
     }
 
     /* Add edges to the minor */
@@ -1140,7 +1198,7 @@ static char *new_game_desc(const game_params *params, random_state *rs,
                     break;
                 /* make K_33 */
                 case 6:
-                    make_K_33(edges_min_234, vtcs_min, n_min);
+                    make_K_33_edges(edges_min_234, vtcs_min, n_min);
                     break;
                 default:;
             }
@@ -2801,8 +2859,6 @@ static char *interpret_move(const game_state *state, game_ui *ui,
     long realx = (x * COORDUNIT / ds->tilesize) - state->base->grid.x_off;
     long realy = y * COORDUNIT / ds->tilesize;
 
-    long real_coord_lim = ds->coord_lim * COORDUNIT / ds->tilesize;
-
     point* pt;
     point* pts = state->base->points;
     vertex* vx;
@@ -2948,8 +3004,8 @@ static char *interpret_move(const game_state *state, game_ui *ui,
              * the drag. If no => make move, else => discard and update game_ui.
              */
             case MOVE_DRAGPOINT:
-                if (ui->newpt.x < 2 * POINTRADIUS || ui->newpt.x + (2 * POINTRADIUS) > real_coord_lim
-                    || ui->newpt.y < 2 * POINTRADIUS || ui->newpt.y + (2 * POINTRADIUS) > real_coord_lim)
+                if (ui->newpt.x < 2 * POINTRADIUS || ui->newpt.x + (2 * POINTRADIUS) > ds->coord_lim
+                    || ui->newpt.y < 2 * POINTRADIUS || ui->newpt.y + (2 * POINTRADIUS) > ds->coord_lim)
                 {
                     ui->current_move = MOVE_IDLE;
                     ui->dragpt = -1;
@@ -2971,12 +3027,13 @@ static char *interpret_move(const game_state *state, game_ui *ui,
              * game_ui.
              */
             case MOVE_CONTREDGE:
-                if (realx < state->base->grid.x_off || realx > state->base->grid.x_off + real_coord_lim
-                    || realy < 0 || realy > real_coord_lim)
+                if (realx < 0 || realx > ds->coord_lim || realy < 0 || realy > ds->coord_lim)
                 {
                     ui->current_move = MOVE_IDLE;
                     ui->mergept_dom = -1;
                     ui->mergept_rec = -1;
+                    LOG(("position x:%ld, y:%ld; x-offset:%d; coordinate limit:%ld\n", realx, realy,
+                        state->base->grid.x_off, ds->coord_lim));
                     LOG(("Unselected edge to contract\n"));
                     return UI_UPDATE;
                 }
@@ -2994,8 +3051,7 @@ static char *interpret_move(const game_state *state, game_ui *ui,
              * game_ui.
              */
             case MOVE_DELPOINT:
-                if (realx < state->base->grid.x_off || realx > state->base->grid.x_off + real_coord_lim
-                    || realy < 0 || realy > real_coord_lim)
+                if (realx < 0 || realx > ds->coord_lim || realy < 0 || realy > ds->coord_lim)
                 {
                     ui->current_move = MOVE_IDLE;
                     ui->delvx = -1;
@@ -3015,8 +3071,7 @@ static char *interpret_move(const game_state *state, game_ui *ui,
              * game_ui.
              */
             case MOVE_DELEDGE:
-                if (realx < state->base->grid.x_off || realx > state->base->grid.x_off + real_coord_lim
-                    || realy < 0 || realy > real_coord_lim)
+                if (realx < 0 || realx > ds->coord_lim || realy < 0 || realy > ds->coord_lim)
                 {
                     ui->current_move = MOVE_IDLE;
                     ui->deledge.src = -1;
