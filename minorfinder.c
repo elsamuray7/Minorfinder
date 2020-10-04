@@ -126,14 +126,14 @@ typedef struct graph {
      */
     grid grid;
 
-    /* array of points - remains the same throughout the game */
+    /* array of points - static size, current point coordinates */
     point* points;
-    /* array of vertices - remains the same throughout the game */
+    /* array of vertices - static size, current vertex degrees */
     vertex* vtcs;
-    /* 234-tree of vertices - maps the current game state */
+    /* 234-tree of vertices - current visible vertices */
     tree234* vertices;
 
-    /* 234-tree of edges - maps the current game state */
+    /* 234-tree of edges - current edges */
     tree234* edges;
 
 } graph;
