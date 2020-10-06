@@ -19,7 +19,7 @@
 #include "tree234.h"
 
 /* debug mode */
-#define DEBUG true
+#define DEBUG false
 
 #define BENCHMARKS
 
@@ -3539,7 +3539,8 @@ static void game_redraw(drawing *dr, game_drawstate *ds,
             ptgt.y = (etgt->y + byoff) * brelsize * ds->tilesize / COORDUNIT;
         }
         draw_line(dr, psrc.x, psrc.y, ptgt.x, ptgt.y,
-                    (e->src == ui->deledge.src && e->tgt == ui->deledge.tgt) ?
+                    ((e->src == ui->deledge.src && e->tgt == ui->deledge.tgt)
+                    || e->src == ui->delvx || e->tgt == ui->delvx) ?
                     COL_DELEDGE : (hide ? COL_HIDEEDGE : COL_EDGE));
     }
     /* Draw the base graph points in the intended grid */
