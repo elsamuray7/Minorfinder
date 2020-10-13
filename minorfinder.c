@@ -3035,8 +3035,10 @@ static char *interpret_move(const game_state *state, game_ui *ui,
              * the drag. If no => make move, else => discard and update game_ui.
              */
             case MOVE_DRAGPOINT:
-                if (ui->newpt.x < 2 * POINTRADIUS || ui->newpt.x + (2 * POINTRADIUS) > ds->coord_lim
-                    || ui->newpt.y < 2 * POINTRADIUS || ui->newpt.y + (2 * POINTRADIUS) > ds->coord_lim)
+                if (ui->newpt.x < 2 * POINTRADIUS
+                    || ui->newpt.x + (2 * POINTRADIUS) > ds->coord_lim * COORDUNIT / ds->tilesize
+                    || ui->newpt.y < 2 * POINTRADIUS
+                    || ui->newpt.y + (2 * POINTRADIUS) > ds->coord_lim * COORDUNIT / ds->tilesize)
                 {
                     ui->current_move = MOVE_IDLE;
                     ui->dragpt = -1;
