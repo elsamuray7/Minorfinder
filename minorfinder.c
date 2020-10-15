@@ -322,178 +322,6 @@ static const char *validate_params(const game_params *params, bool full)
  * 
  */
 
-/* ----------------------------------------------------------------------
- * Small number of 64-bit integer arithmetic operations, to prevent
- * integer overflow at the very core of cross().
- */
-
-typedef struct {
-    long hi;
-    ulong lo;
-} int64;
-
-#define greater64(i,j) ( (i).hi>(j).hi || ((i).hi==(j).hi && (i).lo>(j).lo))
-#define sign64(i) ((i).hi < 0 ? -1 : (i).hi==0 && (i).lo==0 ? 0 : +1)
-
-static int64 mulu32to64(ulong x, ulong y)
-{
-    ulong a, b, c, d, t;
-    int64 ret;
-
-    a = (x & 0xFFFF) * (y & 0xFFFF);
-    b = (x & 0xFFFF) * (y >> 16);
-    c = (x >> 16) * (y & 0xFFFF);
-    d = (x >> 16) * (y >> 16);
-
-    ret.lo = a;
-    ret.hi = d + (b >> 16) + (c >> 16);
-    t = (b & 0xFFFF) << 16;
-    ret.lo += t;
-    if (ret.lo < t)
-	ret.hi++;
-    t = (c & 0xFFFF) << 16;
-    ret.lo += t;
-    if (ret.lo < t)
-	ret.hi++;
-
-#ifdef DIAGNOSTIC_VIA_LONGLONG
-    assert(((ulong long)ret.hi << 32) + ret.lo ==
-	   (ulong long)x * y);
-#endif
-
-    return ret;
-}
-
-static int64 mul32to64(long x, long y)
-{
-    int sign = +1;
-    int64 ret;
-#ifdef DIAGNOSTIC_VIA_LONGLONG
-    long long realret = (long long)x * y;
-#endif
-
-    if (x < 0)
-	x = -x, sign = -sign;
-    if (y < 0)
-	y = -y, sign = -sign;
-
-    ret = mulu32to64(x, y);
-
-    if (sign < 0) {
-	ret.hi = -ret.hi;
-	ret.lo = -ret.lo;
-	if (ret.lo)
-	    ret.hi--;
-    }
-
-#ifdef DIAGNOSTIC_VIA_LONGLONG
-    assert(((ulong long)ret.hi << 32) + ret.lo == realret);
-#endif
-
-    return ret;
-}
-
-static int64 dotprod64(long a, long b, long p, long q)
-{
-    int64 ab, pq;
-
-    ab = mul32to64(a, b);
-    pq = mul32to64(p, q);
-    ab.hi += pq.hi;
-    ab.lo += pq.lo;
-    if (ab.lo < pq.lo)
-	ab.hi++;
-    return ab;
-}
-
-/*
- * Determine whether the line segments between a1 and a2, and
- * between b1 and b2, intersect. We count it as an intersection if
- * any of the endpoints lies _on_ the other line.
- */
-static bool cross(point a1, point a2, point b1, point b2)
-{
-    long b1x, b1y, b2x, b2y, px, py;
-    int64 d1, d2, d3;
-
-    /*
-     * The condition for crossing is that b1 and b2 are on opposite
-     * sides of the line a1-a2, and vice versa. We determine this
-     * by taking the dot product of b1-a1 with a vector
-     * perpendicular to a2-a1, and similarly with b2-a1, and seeing
-     * if they have different signs.
-     */
-
-    /*
-     * Construct the vector b1-a1. We don't have to worry too much
-     * about the denominator, because we're only going to check the
-     * sign of this vector; we just need to get the numerator
-     * right.
-     */
-    b1x = b1.x * a1.d - a1.x * b1.d;
-    b1y = b1.y * a1.d - a1.y * b1.d;
-    /* Now construct b2-a1, and a vector perpendicular to a2-a1,
-     * in the same way. */
-    b2x = b2.x * a1.d - a1.x * b2.d;
-    b2y = b2.y * a1.d - a1.y * b2.d;
-    px = a1.y * a2.d - a2.y * a1.d;
-    py = a2.x * a1.d - a1.x * a2.d;
-    /* Take the dot products. Here we resort to 64-bit arithmetic. */
-    d1 = dotprod64(b1x, px, b1y, py);
-    d2 = dotprod64(b2x, px, b2y, py);
-    /* If they have the same non-zero sign, the lines do not cross. */
-    if ((sign64(d1) > 0 && sign64(d2) > 0) ||
-	(sign64(d1) < 0 && sign64(d2) < 0))
-	return false;
-
-    /*
-     * If the dot products are both exactly zero, then the two line
-     * segments are collinear. At this point the intersection
-     * condition becomes whether or not they overlap within their
-     * line.
-     */
-    if (sign64(d1) == 0 && sign64(d2) == 0) {
-	/* Construct the vector a2-a1. */
-	px = a2.x * a1.d - a1.x * a2.d;
-	py = a2.y * a1.d - a1.y * a2.d;
-	/* Determine the dot products of b1-a1 and b2-a1 with this. */
-	d1 = dotprod64(b1x, px, b1y, py);
-	d2 = dotprod64(b2x, px, b2y, py);
-	/* If they're both strictly negative, the lines do not cross. */
-	if (sign64(d1) < 0 && sign64(d2) < 0)
-	    return false;
-	/* Otherwise, take the dot product of a2-a1 with itself. If
-	 * the other two dot products both exceed this, the lines do
-	 * not cross. */
-	d3 = dotprod64(px, px, py, py);
-	if (greater64(d1, d3) && greater64(d2, d3))
-	    return false;
-    }
-
-    /*
-     * We've eliminated the only important special case, and we
-     * have determined that b1 and b2 are on opposite sides of the
-     * line a1-a2. Now do the same thing the other way round and
-     * we're done.
-     */
-    b1x = a1.x * b1.d - b1.x * a1.d;
-    b1y = a1.y * b1.d - b1.y * a1.d;
-    b2x = a2.x * b1.d - b1.x * a2.d;
-    b2y = a2.y * b1.d - b1.y * a2.d;
-    px = b1.y * b2.d - b2.y * b1.d;
-    py = b2.x * b1.d - b1.x * b2.d;
-    d1 = dotprod64(b1x, px, b1y, py);
-    d2 = dotprod64(b2x, px, b2y, py);
-    if ((sign64(d1) > 0 && sign64(d2) > 0) ||
-	(sign64(d1) < 0 && sign64(d2) < 0))
-	return false;
-
-    /*
-     * The lines must cross.
-     */
-    return true;
-}
-
 static ulong squarert(ulong n) {
     ulong d, a, b, di;
 
@@ -605,7 +433,7 @@ static int vertcmp(void *av, void *bv)
  */
 
 #define POINTRADIUS 5
-#define CROSSPOINT_THRESHOLD (POINTRADIUS / 2)
+#define CROSSPOINT_THRESHOLD (POINTRADIUS / 2.0)
 
 #define square(x) ((x) * (x))
 
@@ -614,141 +442,104 @@ static int vertcmp(void *av, void *bv)
  */
 static bool crosspoint(point s, point t, point p)
 {
-    long dist_st = squarert(square(t.x - s.x) + square(t.y - s.y));
-    long dist_sp = squarert(square(p.x - s.x) + square(p.y - s.y));
-    long dist_pt = squarert(square(t.x - p.x) + square(t.y - p.y));
+    double dist_st = sqrt(square(t.x - s.x) + square(t.y - s.y));
+    double dist_sp = sqrt(square(p.x - s.x) + square(p.y - s.y));
+    double dist_pt = sqrt(square(t.x - p.x) + square(t.y - p.y));
 
     return dist_sp + dist_pt - dist_st < CROSSPOINT_THRESHOLD;
 }
 
 /*
- * Add edges between the vertices in the source range and vertices in the target range.
- * Make sure that edges don't cross other edges or points and the degree of the involved
- * vertices doesn't increase beyond __max_deg.
+ * Add edges between the vertices in the range [offa, offa + na] and vertices in the range
+ * [offb, offb + nb]. Make sure that edges don't cross other edges or points and the degree
+ * of the involved vertices doesn't increase beyond max_deg.
  */
-static void addedges(tree234* edges, vertex* vertices, point* points, const int __off_src_vtcs,
-                    const int __n_src_vtcs, const int __off_tgt_vtcs, const int __n_tgt_vtcs,
-                    const int n_pts, const int __max_deg, random_state* rs)
+static void addedges(tree234* edges, vertex* vertices, point* points, const int offa, int na,
+                    const int offb, int nb, const int n, int max_deg, random_state* rs)
 {
     bool* contains;
     int i;
 #if DEBUG
     int j;
 #endif
-    int off_src_vtcs;
-    int n_src_vtcs;
-    int off_tgt_vtcs;
-    int n_tgt_vtcs;
-    int max_deg;
     vertex* vxa;
     vertex* vxb;
     tree234* vtcs;
-    tree234* src_vtcs;
-    tree234** tgt_vtcs;
-    edge* e;
+    tree234* vtcsa;
+    tree234** vtcsb;
 
-    if (__off_src_vtcs <= __off_tgt_vtcs)
-    {
-        off_src_vtcs = __off_src_vtcs;
-        n_src_vtcs = __n_src_vtcs;
-        off_tgt_vtcs = __off_tgt_vtcs;
-        n_tgt_vtcs = __n_tgt_vtcs;
-    }
-    else
-    {
-        off_src_vtcs = __off_tgt_vtcs;
-        n_src_vtcs = __n_tgt_vtcs;
-        off_tgt_vtcs = __off_src_vtcs;
-        n_tgt_vtcs = __n_src_vtcs;
-    }
-    if (n_src_vtcs < 0)
-        n_src_vtcs = off_tgt_vtcs + n_tgt_vtcs - off_src_vtcs;
-    else if (n_tgt_vtcs < 0)
-        n_tgt_vtcs = off_src_vtcs + n_src_vtcs - off_tgt_vtcs;
-    if (__max_deg < 0) max_deg = max(n_src_vtcs, n_tgt_vtcs) - 1;
-    else max_deg = __max_deg;
+    assert(offa >= 0 && offa < n);
+    assert(offb >= 0 && offb < n);
+    assert(max_deg > 0 && max_deg < n);
+    assert(na >= 0 || nb >= 0);
+    if (na < 0) na = offb + nb - offa;
+    else if (nb < 0) nb = offa + na - offb;
 
-    /* add all source vertices to a 234-tree */
-    src_vtcs = newtree234(vertcmp);
+    /* add all vertices in range a to a 234-tree */
+    vtcsa = newtree234(vertcmp);
     LOG(("Initially added vertices "));
-    for (i = off_src_vtcs; i < off_src_vtcs + n_src_vtcs; i++)
+    for (i = offa; i < offa + na; i++)
     {
-        add234(src_vtcs, vertices + i);
+        add234(vtcsa, vertices + i);
         LOG(("%d, ", vertices[i].idx));
     }
     LOG(("to source vertices\n"));
 
-    /* for every source vertex add all target vertices to a 234-tree */
-    tgt_vtcs = snewn(n_src_vtcs, tree234*);
-    *tgt_vtcs = newtree234(vertcmp);
+    /* for every vertex in range a add all vertices in range b to a 234-tree */
+    vtcsb = snewn(na, tree234*);
+    *vtcsb = newtree234(vertcmp);
     LOG(("Initially added vertices "));
-    for (i = off_tgt_vtcs; i < off_tgt_vtcs + n_tgt_vtcs; i++)
+    for (i = offb; i < offb + nb; i++)
     {
-        add234(*tgt_vtcs, vertices + i);
+        add234(*vtcsb, vertices + i);
         LOG(("%d, ", vertices[i].idx));
     }
     LOG(("to target vertices\n"));
-    for (i = 1; i < n_src_vtcs; i++)
+    for (i = 1; i < na; i++)
     {
-        tgt_vtcs[i] = copytree234(*tgt_vtcs, NULL, NULL);
+        vtcsb[i] = copytree234(*vtcsb, NULL, NULL);
 #if DEBUG
-        assert(count234(tgt_vtcs[i]) == count234(*tgt_vtcs));
-        for (j = 0; j < count234(tgt_vtcs[i]); j++)
+        assert(count234(vtcsb[i]) == count234(*vtcsb));
+        for (j = 0; j < count234(vtcsb[i]); j++)
         {
-            vxa = index234(tgt_vtcs[i], j);
-            vxb = index234(*tgt_vtcs, j);
+            vxa = index234(vtcsb[i], j);
+            vxb = index234(*vtcsb, j);
             assert(vxa->idx == vxb->idx);
         }
 #endif
     }
     
     /*
-     * Start adding edges. Randomly pick two vertices and try to add an edge between them.
-     * If the edge can't be added delete the target vertex from the corresponding target
-     * 234-tree. Otherwise add the edge and update the involved vertices in the source
-     * 234-tree and all target 234-trees. Repeat until there are no more edges to add.
+     * Start adding edges. Pick the lowest degree vertex from the range a 234-tree and a random
+     * vertex from the range b 234-tree and try to add an edge between them. If the edge can't
+     * be added delete the range b vertex from the corresponding 234-tree. Otherwise add the edge
+     * and update the involved vertices in the range a 234-tree and all range b 234-trees. Repeat
+     * until there are no more edges to add.
      */
-    while (count234(src_vtcs))
+    while (count234(vtcsa))
     {
-        vxa = index234(src_vtcs, random_upto(rs, count234(src_vtcs)));
-        vtcs = tgt_vtcs[vxa->idx - off_src_vtcs];
+        vxa = index234(vtcsa, 0);
+        vtcs = vtcsb[vxa->idx - offa];
         if (!count234(vtcs))
         {
-            del234(src_vtcs, vxa);
+            del234(vtcsa, vxa);
             LOG(("Removed vertex %d from source vertices, no more edges to add\n",
                 vxa->idx));
             continue;
         }
+
         vxb = index234(vtcs, random_upto(rs, count234(vtcs)));
         LOG(("Trying to add edge between vertices %d and %d\n", vxa->idx, vxb->idx));
-
-        if (vxb->idx <= vxa->idx)
+        if (vxa->idx == vxb->idx || isedge(edges, vxa->idx, vxb->idx))
         {
             del234(vtcs, vxb);
             LOG(("Removed vertex %d from target vertices of vertex %d,"\
                 " the edge can't be added\n", vxb->idx, vxa->idx));
             continue;
         }
-        /* check for crossing edges */
-        for (i = 0; (e = index234(edges, i)) != NULL; i++)
-        {
-            if (vxa->idx == e->src || vxa->idx == e->tgt || vxb->idx == e->src ||
-                vxb->idx == e->tgt)
-            {
-                continue;
-            }
-            else if (cross(points[vxa->idx], points[vxb->idx], points[e->src],
-                            points[e->tgt]))
-            {
-                del234(vtcs, vxb);
-                LOG(("Removed vertex %d from target vertices of vertex %d,"\
-                    " the edge crosses the edge %d-%d\n", vxb->idx, vxa->idx,
-                    e->src, e->tgt));
-                goto next_vertices; /* this edge crosses another edge => next vertex pair */
-            }
-        }
+
         /* check for crossing points */
-        for (i = 0; i < n_pts; i++)
+        for (i = 0; i < n; i++)
         {
             if (i == vxa->idx || i == vxb->idx)
             {
@@ -765,35 +556,35 @@ static void addedges(tree234* edges, vertex* vertices, point* points, const int 
 
         addedge(edges, vxa->idx, vxb->idx);
         LOG(("Added edge between vertices %d and %d\n", vxa->idx, vxb->idx));
-        contains = snewn(n_src_vtcs, bool);
-        del234(src_vtcs, vxa);
-        for (i = 0; i < n_src_vtcs; i++)
+        contains = snewn(na, bool);
+        del234(vtcsa, vxa);
+        for (i = 0; i < na; i++)
         {
-            contains[i] = del234(tgt_vtcs[i], vxa);
+            contains[i] = del234(vtcsb[i], vxa);
         }
         vxa->deg++;
         if (vxa->deg < max_deg)
         {
-            add234(src_vtcs, vxa);
-            for (i = 0; i < n_src_vtcs; i++)
+            add234(vtcsa, vxa);
+            for (i = 0; i < na; i++)
             {
-                if (contains[i]) add234(tgt_vtcs[i], vxa);
+                if (contains[i]) add234(vtcsb[i], vxa);
             }
         }
-        contains = sresize(contains, n_src_vtcs + 1, bool);
-        *contains = del234(src_vtcs, vxb);
-        for (i = 0; i < n_src_vtcs; i++)
+        contains = sresize(contains, na + 1, bool);
+        *contains = del234(vtcsa, vxb);
+        for (i = 0; i < na; i++)
         {
-            contains[i+1] = del234(tgt_vtcs[i], vxb);
+            contains[i+1] = del234(vtcsb[i], vxb);
         }
         vxb->deg++;
         if (vxb->deg < max_deg)
         {
-            if (*contains) add234(src_vtcs, vxb);
-            for (i = 0; i < n_src_vtcs; i++)
+            if (*contains) add234(vtcsa, vxb);
+            for (i = 0; i < na; i++)
             {
-                if (contains[i+1] && i != vxa->idx - off_src_vtcs)
-                    add234(tgt_vtcs[i], vxb);
+                if (contains[i+1] && i != vxa->idx - offa)
+                    add234(vtcsb[i], vxb);
             }
         }
         sfree(contains);
@@ -803,21 +594,22 @@ static void addedges(tree234* edges, vertex* vertices, point* points, const int 
         next_vertices:;
     }
 
-    freetree234(src_vtcs);
-    for (i = 0; i < n_src_vtcs; i++) freetree234(tgt_vtcs[i]);
-    sfree(tgt_vtcs);
+    freetree234(vtcsa);
+    for (i = 0; i < na; i++) freetree234(vtcsb[i]);
+    sfree(vtcsb);
 }
 
 /*
  * Add edges to a graph with 5 vertices such that it becomes the K_5
  */
-static void make_K_5(tree234* edges, vertex* vertices, int n)
+static void make_K_5_edges(tree234* edges, vertex* vertices, int n)
 {
     int i, j;
 
 #if DEBUG
     assert(n == 5);
 #endif
+
     for (i = 0; i < n - 1; i++)
     {
         for (j = i + 1; j < n; j++)
@@ -839,6 +631,7 @@ static void make_K_33_edges(tree234* edges, vertex* vertices, int n)
 #if DEBUG
     assert(n == 6);
 #endif
+
     addedge(edges, 5, 2);
     addedge(edges, 5, 3);
     addedge(edges, 5, 4);
@@ -885,6 +678,7 @@ static void make_K_33_points(point* points, long lim, int n)
 #if DEBUG
     assert(n == 6);
 #endif
+
     for (i = 0; i < n; i++)
     {
         switch (i)
@@ -930,6 +724,9 @@ typedef struct edge_ext {
     int degsum;
 } edge_ext;
 
+/**
+ *  Compares two constant extended edges by their degsum and ditance
+ */
 static int eextcmpC(const void *av, const void  *bv)
 {
     const edge_ext *a = (edge_ext *)av;
@@ -942,6 +739,9 @@ static int eextcmpC(const void *av, const void  *bv)
     else return edgecmpC(&a->e, &b->e);
 }
 
+/**
+ * Compares two extended edges with eextcmpC
+ */
 static int eextcmp(void *av, void *bv)
 {
     return eextcmpC(av, bv);
@@ -951,33 +751,33 @@ static int eextcmp(void *av, void *bv)
  * Add edges to the remaining points. Determine for every remaining point the three shortest
  * possible edges that don't cross any point and add them to it.
  */
-static void addedges_rempts_shodist(tree234* edges, vertex* vertices, point* points, int rem,
-                        int n, int lim)
+static void addedges_rempts_shodist(tree234* edges, vertex* vertices, point* points,
+                                    const int offrem, const int n)
 {
-    int i, j, k;
+    int i, j, k, l;
 
-    if (vertices[rem].deg == 0)
+    for (i = offrem; i < n; i++)
     {
         int found = -1;
         long best_sqdists[3];
         edge bestes[3];
-        best_sqdists[0] = best_sqdists[1] = best_sqdists[2] = square(lim * COORDUNIT);
-        bestes[0].tgt = bestes[1].tgt = bestes[2].tgt = rem;
-        for (i = 0; i < rem; i++)
+        best_sqdists[0] = best_sqdists[1] = best_sqdists[2] = square(COORDLIMIT(n) * COORDUNIT);
+        bestes[0].tgt = bestes[1].tgt = bestes[2].tgt = i;
+        for (j = 0; j < i; j++)
         {
             bool cross = false;
-            if (i == rem)
+            if (j == i)
             {
                 continue;
             }
             /* check for crossing points */
-            for (j = 0; j < n; j++)
+            for (k = 0; k < n; k++)
             {
-                if (j == rem || j == i)
+                if (k == i || k == j)
                 {
                     continue;
                 }
-                else if (crosspoint(points[i], points[rem], points[j]))
+                else if (crosspoint(points[j], points[i], points[k]))
                 {
                     cross = true;
                     break;
@@ -985,38 +785,38 @@ static void addedges_rempts_shodist(tree234* edges, vertex* vertices, point* poi
             }
             if (!cross)
             {
-                long sqdist = square(points[i].x - points[rem].x)
-                                + square(points[i].y - points[rem].y);
-                for (j = 0; j < 3; j++)
+                long sqdist = square(points[j].x - points[i].x)
+                                + square(points[j].y - points[i].y);
+                for (k = 0; k < 3; k++)
                 {
-                    if (sqdist < best_sqdists[j])
+                    if (sqdist < best_sqdists[k])
                     {
                         if (found < 2) found++;
-                        for (k = found; k > j; k--)
+                        for (l = found; l > k; l--)
                         {
-                            best_sqdists[k] = best_sqdists[k-1];
-                            bestes[k].src = bestes[k-1].src;
+                            best_sqdists[l] = best_sqdists[l-1];
+                            bestes[l].src = bestes[l-1].src;
                         }
-                        best_sqdists[j] = sqdist;
-                        bestes[j].src = i;
-                        for (k = 0; k <= found; k++)
+                        best_sqdists[k] = sqdist;
+                        bestes[k].src = j;
+                        for (l = 0; l <= found; l++)
                         {
-                            LOG(("%d-st/nd/th shortest edge is %d-%d\n", k,
-                                bestes[k].src, bestes[k].tgt));
+                            LOG(("%d-st/nd/th shortest edge is %d-%d\n", l,
+                                bestes[l].src, bestes[l].tgt));
                         }
                         break;
                     }
                 }
             }
         }
-        for (i = 0; i <= found; i++)
+        for (j = 0; j <= found; j++)
         {
-            addedge(edges, bestes[i].src, bestes[i].tgt);
+            addedge(edges, bestes[j].src, bestes[j].tgt);
 #if DEBUG
-            assert(find234(edges, bestes + i, NULL));
+            assert(find234(edges, bestes + j, NULL));
 #endif
-            vertices[bestes[i].src].deg++;
-            vertices[bestes[i].tgt].deg++;
+            vertices[bestes[j].src].deg++;
+            vertices[bestes[j].tgt].deg++;
         }
     }
 }
@@ -1188,15 +988,13 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     switch (params->mode)
     {
         case NORMAL:
-            addedges(edges_min_234, vtcs_min, pts_min, 0, n_min, 0, -1, n_min, -1, rs);
+            addedges(edges_min_234, vtcs_min, pts_min, 0, n_min, 0, -1, n_min, n_min - 2, rs);
             break;
         case WAGNER:
             switch (n_min) {
-                /* make K_5 */
                 case 5:
-                    make_K_5(edges_min_234, vtcs_min, n_min);
+                    make_K_5_edges(edges_min_234, vtcs_min, n_min);
                     break;
-                /* make K_33 */
                 case 6:
                     make_K_33_edges(edges_min_234, vtcs_min, n_min);
                     break;
@@ -1299,7 +1097,7 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     for (i = 0; i < n_min; i++)
     {
         addedges(edges_base_234, vtcs_base, pts_base,  i * n_sub, n_sub, i * n_sub, -1,
-                n_min * n_sub, -1, rs);
+                n_min * n_sub, 2 * n_sub / 3, rs);
     }
 
     /*
@@ -1311,7 +1109,6 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     {
         bool added = false;
         edge beste;
-        edge* _e;
         edge_ext* eext;
         tree234* eexts = newtree234(eextcmp);
         beste.src = beste.tgt = -1;
@@ -1338,19 +1135,6 @@ static char *new_game_desc(const game_params *params, random_state *rs,
         for (j = 0; (eext = index234(eexts, j)) != NULL; j++)
         {
             beste = eext->e;
-            if (params->mode == NORMAL)
-            {
-                /* check for crossing edges */
-                for (l = 0; (_e = index234(edges_base_234, l)) != NULL; l++)
-                {
-                    if (_e->src == beste.src || _e->tgt == beste.src
-                        || _e->src == beste.tgt || _e->tgt == beste.tgt)
-                        continue;
-                    else if (cross(pts_base[beste.src], pts_base[beste.tgt],
-                                    pts_base[_e->src], pts_base[_e->tgt]))
-                        goto next_subedge; /* this edge crosses another edge => next target */
-                }
-            }
             /* check for crossing points */
             for (l = 0; l < n_min * n_sub; l++)
             {
@@ -1426,31 +1210,7 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     sfree(coords_y);
 
     /* Add edges to the remaining points */
-    switch (params->mode)
-    {
-        case NORMAL:
-            addedges(edges_base_234, vtcs_base, pts_base, 0, n_base, n_min * n_sub, -1,
-                    n_base, -1, rs);
-            for (i = n_min * n_sub; i < n_base; i++)
-            {
-                addedges_rempts_shodist(edges_base_234, vtcs_base, pts_base, i, n_base,
-                                        coord_lim);
-            }
-            break;
-        /*
-         * Avoid edges across the whole grid since that makes the graph too unclear.
-         * Instead for every remaining point only add edges to the three points with
-         * the shortest distance to it.
-         */
-        case WAGNER:
-            for (i = n_min * n_sub; i < n_base; i++)
-            {
-                addedges_rempts_shodist(edges_base_234, vtcs_base, pts_base, i, n_base,
-                                        coord_lim);
-            }
-            break;
-        default:;
-    }
+    addedges_rempts_shodist(edges_base_234, vtcs_base, pts_base, n_min * n_sub, n_base);
 
 #if DEBUG
     for (i = n_min * n_sub; i < n_base; i++)
@@ -1569,8 +1329,8 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     /* The aux string is not required and therefore it is set to NULL */
     *aux = NULL;
 
-    sfree(pts_min);
     sfree(vtcs_min);
+    sfree(pts_min);
     while ((e = delpos234(edges_min_234, 0)) != NULL) sfree(e);
     freetree234(edges_min_234);
 
@@ -3060,7 +2820,8 @@ static char *interpret_move(const game_state *state, game_ui *ui,
              * game_ui.
              */
             case MOVE_CONTREDGE:
-                if (realx < 0 || realx > ds->coord_lim || realy < 0 || realy > ds->coord_lim)
+                if (realx < 0 || realx > ds->coord_lim * COORDUNIT / ds->tilesize
+                    || y < 0 || y > ds->coord_lim)
                 {
                     ui->current_move = MOVE_IDLE;
                     ui->mergept_dom = -1;
@@ -3084,7 +2845,8 @@ static char *interpret_move(const game_state *state, game_ui *ui,
              * game_ui.
              */
             case MOVE_DELPOINT:
-                if (realx < 0 || realx > ds->coord_lim || realy < 0 || realy > ds->coord_lim)
+                if (realx < 0 || realx > ds->coord_lim * COORDUNIT / ds->tilesize
+                    || y < 0 || y > ds->coord_lim)
                 {
                     ui->current_move = MOVE_IDLE;
                     ui->delvx = -1;
@@ -3104,7 +2866,8 @@ static char *interpret_move(const game_state *state, game_ui *ui,
              * game_ui.
              */
             case MOVE_DELEDGE:
-                if (realx < 0 || realx > ds->coord_lim || realy < 0 || realy > ds->coord_lim)
+                if (realx < 0 || realx > ds->coord_lim * COORDUNIT / ds->tilesize
+                    || y < 0 || y > ds->coord_lim)
                 {
                     ui->current_move = MOVE_IDLE;
                     ui->deledge.src = -1;
