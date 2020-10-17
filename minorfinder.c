@@ -39,7 +39,6 @@ enum {
     COL_SYSBACKGROUND,
     COL_BACKGROUND,
     COL_OUTLINE,
-    COL_GRIDBORDER,
     COL_BASEPOINT,
     COL_MINORPOINT,
     COL_DRAGPOINT,
@@ -3033,11 +3032,6 @@ static float *game_colours(frontend *fe, int *ncolours)
     ret[(COL_OUTLINE * 3) + 1] = 0.3F;
     ret[(COL_OUTLINE * 3) + 2] = 0.3F;
 
-    /* dark grey */
-    ret[(COL_GRIDBORDER * 3) + 0] = 0.3F;
-    ret[(COL_GRIDBORDER * 3) + 1] = 0.3F;
-    ret[(COL_GRIDBORDER * 3) + 2] = 0.3F;
-
     /* blue */
     ret[(COL_BASEPOINT * 3) + 0] = 0.0F;
     ret[(COL_BASEPOINT * 3) + 1] = 0.0F;
@@ -3172,10 +3166,15 @@ static void game_redraw(drawing *dr, game_drawstate *ds,
      */
     draw_rect(dr, 0, 0, ds->width, ds->height, bg_color);
     draw_rect_outline(dr, 0, 0, ds->width, ds->height, COL_OUTLINE);
+    draw_rect_outline(dr, ds->coord_lim * mrelsize, 0,
+                    ds->width - (ds->coord_lim * mrelsize), ds->height,
+                    COL_OUTLINE);
 
     /* Draw the minor grid outline */
-    draw_rect_outline(dr, mxoff, myoff, ds->coord_lim * mrelsize,
+    draw_rect_outline(dr, 0, 0, ds->coord_lim * mrelsize + 1,
                     ds->coord_lim * mrelsize, COL_OUTLINE);
+    draw_rect(dr, mxoff, ds->coord_lim * mrelsize, ds->coord_lim * mrelsize,
+            ds->height - (ds->coord_lim * mrelsize), COL_SYSBACKGROUND);
     
     /* Draw the minor edges in the intended grid */
     pts = state->minor->points;
