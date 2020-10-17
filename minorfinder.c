@@ -19,7 +19,7 @@
 #include "tree234.h"
 
 /* debug mode */
-#define DEBUG true
+#define DEBUG false
 
 #define BENCHMARKS
 
@@ -899,6 +899,7 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     vertex* vtcs_base;
 
     edge* e;
+    tree234* tmp_234;
     tree234* edges_min_234;
     tree234* edges_base_234;
 
@@ -1164,7 +1165,9 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     /* Add edges to the remaining points */
     addedges(edges_base_234, vtcs_base, pts_base, 0, n_base, n_base - 1, n_min * n_sub, -1, 3,
             n_base, rs);
+    
     /* Add more edges to confuse the player */
+    tmp_234 = copytree234(edges_base_234, NULL, NULL);
     addedges(edges_base_234, vtcs_base, pts_base, 0, n_base, 5, 0, -1, -1, n_base, rs);
 
 #if DEBUG
@@ -1283,8 +1286,34 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     sfree(edges_base);
     }
 
-    /* The aux string is not required and therefore it is set to NULL */
     *aux = NULL;
+    {
+    const char* sep = ",";
+    char buf[80];
+    int size = 128;
+    int len = 0;
+    int off;
+
+    *aux = snewn(size, char);
+
+    /*
+     * Encode all redundant edges between distinct subgraphs in the aux string
+     */
+    for (i = 0; (e = index234(edges_base_234, i)) != NULL; i++)
+    {
+        if (!isedge(tmp_234, e->src, e->tgt))
+        {
+            off = sprintf(buf, "%d-%d%s", e->src, e->tgt, sep);
+            if (len + off >= size)
+            {
+                size = len + off + 128;
+                *aux = sresize(*aux, size, char);
+            }
+            strcpy(*aux + len, buf);
+            len += off;
+        }
+    }
+    }
 
     sfree(vtcs_min);
     sfree(pts_min);
@@ -1302,6 +1331,7 @@ static char *new_game_desc(const game_params *params, random_state *rs,
         printf("Base graph dissimiliarity between the last two game generations is %d\n",
                 GraphDissim);
 #endif
+    freetree234(tmp_234);
 
     return ret;
 }
@@ -2331,6 +2361,13 @@ static char *solve_game(const game_state *state, const game_state *currstate,
     tree234* solution;
 
     /*
+     * If no aux string has been provided, try to solve the game via the
+     * bruteforce solver
+     */
+    if (!aux) goto try_solve_bruteforce;
+    else LOG(("Aux string is: %s\n", aux));
+
+    /*
      * Delete all edges that are incident to the remaining points and then delete
      * the remaining points themselves.
      */
@@ -2369,6 +2406,48 @@ static char *solve_game(const game_state *state, const game_state *currstate,
             LOG(("Deleted point %d\n", vx->idx));
             LOG(("Number of visible vertices is %d\n", count234(solved->base->vertices)));
         }
+    }
+
+    while (*aux)
+    {
+        edge _e;
+        LOG(("Read edge from aux string: "));
+        _e.src = atoi(aux);
+        LOG(("%d-", _e.src));
+#if DEBUG
+        assert(_e.src >= 0 && _e.src < state->params.n_base);
+#endif
+        while (*aux && isdigit((uint8) *aux)) aux++;
+#if DEBUG
+        assert(*aux == '-');
+#endif
+        aux++;
+        _e.tgt = atoi(aux);
+        LOG(("%d\n", _e.tgt));
+#if DEBUG
+        assert(_e.tgt >= 0 && _e.tgt < state->params.n_base);
+#endif
+        while (*aux && isdigit((uint8) *aux)) aux++;
+
+        if (isedge(solved->base->edges, _e.src, _e.tgt))
+        {
+            retoff = sprintf(buf, "%d:%d-%d;", MOVE_DELEDGE, _e.src, _e.tgt);
+            if (retlen + retoff >= retsize)
+            {
+                retsize = retlen + retoff + 256;
+                ret = sresize(ret, retsize, char);
+            }
+            strcpy(ret + retlen, buf);
+            retlen += retoff;
+
+            delete_edge(solved->base, _e);
+            LOG(("Deleted edge %d-%d\n", _e.src, _e.tgt));
+        }
+
+#if DEBUG
+        assert(*aux == ',');
+#endif
+        aux++;
     }
 
     /*
@@ -2426,8 +2505,9 @@ static char *solve_game(const game_state *state, const game_state *currstate,
         assert(!isomorphism_bruteforce(solved->minor, solved->base));
 #endif
         sfree(ret);
-        ret = NULL;
         free_game(solved);
+        try_solve_bruteforce:
+        ret = NULL;
         solved = NULL;
         retsize = 256;
         retlen = 0;
