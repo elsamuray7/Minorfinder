@@ -455,7 +455,7 @@ static bool crosspoint(point s, point t, point p)
  * of the involved vertices doesn't increase beyond max_deg.
  */
 static void addedges(tree234* edges, vertex* vertices, point* points, int offa, int cnta,
-                    int offb, int cntb, const int n, int max_deg, random_state* rs)
+                    int maxdega, int offb, int cntb, int maxdegb, const int n, random_state* rs)
 {
     bool* contains;
     int i;
@@ -471,9 +471,13 @@ static void addedges(tree234* edges, vertex* vertices, point* points, int offa, 
 #if DEBUG
     assert(offa >= 0 && offa < n);
     assert(offb >= 0 && offb < n);
-    assert(max_deg > 0 && max_deg < n);
     assert(cnta >= 0 || cntb >= 0);
+    assert(cnta <= n - offa && cntb <= n - offb);
+    assert(maxdega > 0 || maxdegb > 0);
+    assert(maxdega < n && maxdegb < n);
 #endif
+    if (cnta < 0) cnta = offb + cntb - offa;
+    else if (cntb < 0) cntb = offa + cnta - offb;
     if (cnta < cntb) {
         int tmp = cnta;
         cnta = cntb;
@@ -482,8 +486,8 @@ static void addedges(tree234* edges, vertex* vertices, point* points, int offa, 
         offa = offb;
         offb = tmp;
     }
-    if (cnta < 0) cnta = offb + cntb - offa;
-    else if (cntb < 0) cntb = offa + cnta - offb;
+    if (maxdega < 0) maxdega = maxdegb;
+    else if (maxdegb < 0) maxdegb = maxdega;
 
     /* add all vertices in range a to a 234-tree */
     vtcsa = newtree234(vertcmp);
@@ -521,8 +525,8 @@ static void addedges(tree234* edges, vertex* vertices, point* points, int offa, 
     
     /*
      * Start adding edges. Pick the lowest degree vertex from the range a 234-tree and a
-     * random vertex from the range b 234-tree and try to add an edge between them. If
-     * the edge can't be added delete the range b vertex from the corresponding 234-tree.
+     * random vertex from the range b 234-tree and try to add an edge between them.
+     * If the edge can't be added delete the range b vertex from the corresponding 234-tree.
      * Otherwise add the edge and update the involved vertices in the range a 234-tree and
      * all range b 234-trees. Repeat until there are no more edges to add.
      */
@@ -594,7 +598,7 @@ static void addedges(tree234* edges, vertex* vertices, point* points, int offa, 
             contains[i] = del234(vtcsb[i], vxa);
         }
         vxa->deg++;
-        if (vxa->deg < max_deg)
+        if (vxa->deg < maxdega)
         {
             add234(vtcsa, vxa);
             for (i = 0; i < cnta; i++)
@@ -609,7 +613,7 @@ static void addedges(tree234* edges, vertex* vertices, point* points, int offa, 
             contains[i+1] = del234(vtcsb[i], vxb);
         }
         vxb->deg++;
-        if (vxb->deg < max_deg)
+        if (vxb->deg < maxdegb)
         {
             if (*contains) add234(vtcsa, vxb);
             for (i = 0; i < cnta; i++)
@@ -690,7 +694,7 @@ static void make_K_33_edges(tree234* edges, vertex* vertices, int n)
 #define COORDUNIT 16
 
 #define MINORRADIUS(n) ((n) / 3)
-#define SUBGRAPH_DISTANCE (2 * POINTRADIUS)
+#define SUBGRAPH_DISTANCE (2 * POINTRADIUS) + 1
 #define SUBGRAPH_POINTENTROPY 2
 #define OVERLAYPOINT_TRESHOLD_GAMEGEN square(4 * POINTRADIUS)
 
@@ -938,7 +942,8 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     switch (params->mode)
     {
         case NORMAL:
-            addedges(edges_min_234, vtcs_min, pts_min, 0, n_min, 0, -1, n_min, n_min - 2, rs);
+            addedges(edges_min_234, vtcs_min, pts_min, 0, n_min, n_min - 2, 0, -1, -1, n_min,
+                    rs);
             break;
         case WAGNER:
             switch (n_min) {
@@ -1046,8 +1051,8 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     edges_base_234 = newtree234(edgecmp);
     for (i = 0; i < n_min; i++)
     {
-        addedges(edges_base_234, vtcs_base, pts_base,  i * n_sub, n_sub, i * n_sub, -1,
-                n_min * n_sub, 2 * n_sub / 3, rs);
+        addedges(edges_base_234, vtcs_base, pts_base,  i * n_sub, n_sub, 2 * n_sub / 3,
+                i * n_sub, -1, -1, n_min * n_sub, rs);
     }
 
     /*
@@ -1147,30 +1152,30 @@ static char *new_game_desc(const game_params *params, random_state *rs,
             if (square(pt->x - p.x) + square(pt->y - p.y) < OVERLAYPOINT_TRESHOLD_GAMEGEN)
                 goto next_coords; /* the point overlays another point => next coords */
         }
-        pt = pts_base + tmp2 + tmp3++;
+        pt = pts_base + tmp2 + tmp3;
         *pt = p;
         LOG(("Assigned coordinates x:%ld, y:%ld and denominator %ld to base graph point"\
-            " %ld\n", pt->x, pt->y, pt->d, tmp2 + tmp3 - 1));
-        if (tmp2 + tmp3 >= n_base) break;
+            " %ld\n", pt->x, pt->y, pt->d, tmp2 + tmp3));
+        if (tmp2 + ++tmp3 >= n_base) break;
         next_coords:;
     }
     sfree(coords_x);
     sfree(coords_y);
 
     /* Add edges to the remaining points */
-    addedges(edges_base_234, vtcs_base, pts_base, 0, n_base, n_min * n_sub, -1, n_base, 3,
-            rs);
+    addedges(edges_base_234, vtcs_base, pts_base, 0, n_base, n_base - 1, n_min * n_sub, -1, 3,
+            n_base, rs);
+    /* Add more edges to confuse the player */
+    addedges(edges_base_234, vtcs_base, pts_base, 0, n_base, 5, 0, -1, -1, n_base, rs);
 
 #if DEBUG
-    for (i = 0; i < n_min * n_sub; i++) {
+    LOG(("Base graph vertices have  index - degree "));
+    for (i = 0; i < n_base; i++) {
         vx = vtcs_base + i;
+        LOG(("%d-%d, ", vx->idx, vx->deg));
         assert(vx->deg > 0);
     }
-    for (i = n_min * n_sub; i < n_base; i++)
-    {
-        vx = vtcs_base + i;
-        assert(vx->deg == 3);
-    }
+    LOG(("\n"));
 #endif
 
     /*
