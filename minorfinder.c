@@ -19,7 +19,7 @@
 #include "tree234.h"
 
 /* debug mode */
-#define DEBUG false
+#define DEBUG true
 
 #define BENCHMARKS
 
@@ -450,12 +450,12 @@ static bool crosspoint(point s, point t, point p)
 }
 
 /*
- * Add edges between the vertices in the range [offa, offa + na] and vertices in the range
- * [offb, offb + nb]. Make sure that edges don't cross other edges or points and the degree
+ * Add edges between the vertices in the range [offa, offa + cnta] and vertices in the range
+ * [offb, offb + cntb]. Make sure that edges don't cross other edges or points and the degree
  * of the involved vertices doesn't increase beyond max_deg.
  */
-static void addedges(tree234* edges, vertex* vertices, point* points, const int offa, int na,
-                    const int offb, int nb, const int n, int max_deg, random_state* rs)
+static void addedges(tree234* edges, vertex* vertices, point* points, int offa, int cnta,
+                    int offb, int cntb, const int n, int max_deg, random_state* rs)
 {
     bool* contains;
     int i;
@@ -468,34 +468,44 @@ static void addedges(tree234* edges, vertex* vertices, point* points, const int 
     tree234* vtcsa;
     tree234** vtcsb;
 
+#if DEBUG
     assert(offa >= 0 && offa < n);
     assert(offb >= 0 && offb < n);
     assert(max_deg > 0 && max_deg < n);
-    assert(na >= 0 || nb >= 0);
-    if (na < 0) na = offb + nb - offa;
-    else if (nb < 0) nb = offa + na - offb;
+    assert(cnta >= 0 || cntb >= 0);
+#endif
+    if (cnta < cntb) {
+        int tmp = cnta;
+        cnta = cntb;
+        cntb = tmp;
+        tmp = offa;
+        offa = offb;
+        offb = tmp;
+    }
+    if (cnta < 0) cnta = offb + cntb - offa;
+    else if (cntb < 0) cntb = offa + cnta - offb;
 
     /* add all vertices in range a to a 234-tree */
     vtcsa = newtree234(vertcmp);
     LOG(("Initially added vertices "));
-    for (i = offa; i < offa + na; i++)
+    for (i = offa; i < offa + cnta; i++)
     {
         add234(vtcsa, vertices + i);
         LOG(("%d, ", vertices[i].idx));
     }
-    LOG(("to source vertices\n"));
+    LOG(("to range a vertices\n"));
 
     /* for every vertex in range a add all vertices in range b to a 234-tree */
-    vtcsb = snewn(na, tree234*);
+    vtcsb = snewn(cnta, tree234*);
     *vtcsb = newtree234(vertcmp);
     LOG(("Initially added vertices "));
-    for (i = offb; i < offb + nb; i++)
+    for (i = offb; i < offb + cntb; i++)
     {
         add234(*vtcsb, vertices + i);
         LOG(("%d, ", vertices[i].idx));
     }
-    LOG(("to target vertices\n"));
-    for (i = 1; i < na; i++)
+    LOG(("to range b vertices\n"));
+    for (i = 1; i < cnta; i++)
     {
         vtcsb[i] = copytree234(*vtcsb, NULL, NULL);
 #if DEBUG
@@ -510,11 +520,11 @@ static void addedges(tree234* edges, vertex* vertices, point* points, const int 
     }
     
     /*
-     * Start adding edges. Pick the lowest degree vertex from the range a 234-tree and a random
-     * vertex from the range b 234-tree and try to add an edge between them. If the edge can't
-     * be added delete the range b vertex from the corresponding 234-tree. Otherwise add the edge
-     * and update the involved vertices in the range a 234-tree and all range b 234-trees. Repeat
-     * until there are no more edges to add.
+     * Start adding edges. Pick the lowest degree vertex from the range a 234-tree and a
+     * random vertex from the range b 234-tree and try to add an edge between them. If
+     * the edge can't be added delete the range b vertex from the corresponding 234-tree.
+     * Otherwise add the edge and update the involved vertices in the range a 234-tree and
+     * all range b 234-trees. Repeat until there are no more edges to add.
      */
     while (count234(vtcsa))
     {
@@ -523,19 +533,30 @@ static void addedges(tree234* edges, vertex* vertices, point* points, const int 
         if (!count234(vtcs))
         {
             del234(vtcsa, vxa);
-            LOG(("Removed vertex %d from source vertices, no more edges to add\n",
+            LOG(("Removed vertex %d from range a vertices, no more edges to add\n",
                 vxa->idx));
             continue;
         }
 
+        next_vxb:
         vxb = index234(vtcs, random_upto(rs, count234(vtcs)));
         LOG(("Trying to add edge between vertices %d and %d\n", vxa->idx, vxb->idx));
         if (vxa->idx == vxb->idx || isedge(edges, vxa->idx, vxb->idx))
         {
             del234(vtcs, vxb);
-            LOG(("Removed vertex %d from target vertices of vertex %d,"\
+            LOG(("Removed vertex %d from range b vertices of vertex %d,"\
                 " the edge can't be added\n", vxb->idx, vxa->idx));
-            continue;
+            if (count234(vtcs))
+            {
+                goto next_vxb;
+            }
+            else
+            {
+                del234(vtcsa, vxa);
+                LOG(("Removed vertex %d from range a vertices, no more edges to add\n",
+                    vxa->idx));
+                continue;
+            }
         }
 
         /* check for crossing points */
@@ -548,17 +569,27 @@ static void addedges(tree234* edges, vertex* vertices, point* points, const int 
             else if (crosspoint(points[vxa->idx], points[vxb->idx], points[i]))
             {
                 del234(vtcs, vxb);
-                LOG(("Removed vertex %d from target vertices of vertex %d,"\
+                LOG(("Removed vertex %d from range b vertices of vertex %d,"\
                     " the edge crosses the point %d\n", vxb->idx, vxa->idx, i));
-                goto next_vertices; /* this edge crosses a point => next vertex pair */
+                if (count234(vtcs))
+                {
+                    goto next_vxb;
+                }
+                else
+                {
+                    del234(vtcsa, vxa);
+                    LOG(("Removed vertex %d from range a vertices, no more edges to add\n",
+                        vxa->idx));
+                    goto next_vxa;
+                }
             }
         }
 
         addedge(edges, vxa->idx, vxb->idx);
         LOG(("Added edge between vertices %d and %d\n", vxa->idx, vxb->idx));
-        contains = snewn(na, bool);
+        contains = snewn(cnta, bool);
         del234(vtcsa, vxa);
-        for (i = 0; i < na; i++)
+        for (i = 0; i < cnta; i++)
         {
             contains[i] = del234(vtcsb[i], vxa);
         }
@@ -566,14 +597,14 @@ static void addedges(tree234* edges, vertex* vertices, point* points, const int 
         if (vxa->deg < max_deg)
         {
             add234(vtcsa, vxa);
-            for (i = 0; i < na; i++)
+            for (i = 0; i < cnta; i++)
             {
                 if (contains[i]) add234(vtcsb[i], vxa);
             }
         }
-        contains = sresize(contains, na + 1, bool);
+        contains = sresize(contains, cnta + 1, bool);
         *contains = del234(vtcsa, vxb);
-        for (i = 0; i < na; i++)
+        for (i = 0; i < cnta; i++)
         {
             contains[i+1] = del234(vtcsb[i], vxb);
         }
@@ -581,7 +612,7 @@ static void addedges(tree234* edges, vertex* vertices, point* points, const int 
         if (vxb->deg < max_deg)
         {
             if (*contains) add234(vtcsa, vxb);
-            for (i = 0; i < na; i++)
+            for (i = 0; i < cnta; i++)
             {
                 if (contains[i+1] && i != vxa->idx - offa)
                     add234(vtcsb[i], vxb);
@@ -591,11 +622,11 @@ static void addedges(tree234* edges, vertex* vertices, point* points, const int 
         LOG(("Updated degrees of vertices %d to %d and %d to %d\n", vxa->idx, vxa->deg,
             vxb->idx, vxb->deg));
 
-        next_vertices:;
+        next_vxa:;
     }
 
     freetree234(vtcsa);
-    for (i = 0; i < na; i++) freetree234(vtcsb[i]);
+    for (i = 0; i < cnta; i++) freetree234(vtcsb[i]);
     sfree(vtcsb);
 }
 
@@ -658,12 +689,8 @@ static void make_K_33_edges(tree234* edges, vertex* vertices, int n)
 #define COORDLIMIT(n) ((n) + (2 * COORDMARGIN))
 #define COORDUNIT 16
 
-/*
- * We use bigger values for counter and denominator here because we also want
- * appropriate results for small n.
- */
-#define MINORRADIUS(n) ((10 * (n)) / 30)
-#define SUBGRAPH_DISTANCE (4 * POINTRADIUS)
+#define MINORRADIUS(n) ((n) / 3)
+#define SUBGRAPH_DISTANCE (2 * POINTRADIUS)
 #define SUBGRAPH_POINTENTROPY 2
 #define OVERLAYPOINT_TRESHOLD_GAMEGEN square(4 * POINTRADIUS)
 
@@ -671,7 +698,7 @@ static void make_K_33_edges(tree234* edges, vertex* vertices, int n)
  * Arrange the points of a K_33 in two rows of three points each, such that it
  * becomes the default presentation of the K_33.
  */
-static void make_K_33_points(point* points, long lim, int n)
+static void make_K_33_points(point* points, long clim, int n)
 {
     int i;
 
@@ -685,15 +712,15 @@ static void make_K_33_points(point* points, long lim, int n)
         {
             case 0:
             case 3:
-                points[i].x = lim * COORDUNIT / 2;
+                points[i].x = clim * COORDUNIT / 2;
                 break;
             case 1:
             case 2:
-                points[i].x = lim * COORDUNIT / 5;
+                points[i].x = clim * COORDUNIT / 5;
                 break;
             case 4:
             case 5:
-                points[i].x = lim * COORDUNIT * 4 / 5;
+                points[i].x = clim * COORDUNIT * 4 / 5;
                 break;
             default:;
         }
@@ -702,12 +729,12 @@ static void make_K_33_points(point* points, long lim, int n)
             case 5:
             case 0:
             case 1:
-                points[i].y = lim * COORDUNIT / 4;
+                points[i].y = clim * COORDUNIT / 4;
                 break;
             case 2:
             case 3:
             case 4:
-                points[i].y = lim * COORDUNIT * 3 / 4;
+                points[i].y = clim * COORDUNIT * 3 / 4;
                 break;
             default:;
         }
@@ -715,17 +742,16 @@ static void make_K_33_points(point* points, long lim, int n)
 }
 
 /*
- * Extended edge. Stores a value proportional to the distance and the degree sum
- * of its incident vertices.
+ * Extended edge. Stores a value proportional and the degree sum of its incident
+ * vertices.
  */
 typedef struct edge_ext {
     edge e;
-    ulong dist;
     int degsum;
 } edge_ext;
 
-/**
- *  Compares two constant extended edges by their degsum and ditance
+/*
+ *  Compares two constant extended edges by their degsum and edge
  */
 static int eextcmpC(const void *av, const void  *bv)
 {
@@ -734,91 +760,15 @@ static int eextcmpC(const void *av, const void  *bv)
 
     if (a->degsum < b->degsum) return -1;
     else if (a->degsum > b->degsum) return 1;
-    else if (a->dist < b->dist) return -1;
-    else if (a->dist > b->dist) return 1;
     else return edgecmpC(&a->e, &b->e);
 }
 
-/**
+/*
  * Compares two extended edges with eextcmpC
  */
 static int eextcmp(void *av, void *bv)
 {
     return eextcmpC(av, bv);
-}
-
-/*
- * Add edges to the remaining points. Determine for every remaining point the three shortest
- * possible edges that don't cross any point and add them to it.
- */
-static void addedges_rempts_shodist(tree234* edges, vertex* vertices, point* points,
-                                    const int offrem, const int n)
-{
-    int i, j, k, l;
-
-    for (i = offrem; i < n; i++)
-    {
-        int found = -1;
-        long best_sqdists[3];
-        edge bestes[3];
-        best_sqdists[0] = best_sqdists[1] = best_sqdists[2] = square(COORDLIMIT(n) * COORDUNIT);
-        bestes[0].tgt = bestes[1].tgt = bestes[2].tgt = i;
-        for (j = 0; j < i; j++)
-        {
-            bool cross = false;
-            if (j == i)
-            {
-                continue;
-            }
-            /* check for crossing points */
-            for (k = 0; k < n; k++)
-            {
-                if (k == i || k == j)
-                {
-                    continue;
-                }
-                else if (crosspoint(points[j], points[i], points[k]))
-                {
-                    cross = true;
-                    break;
-                }
-            }
-            if (!cross)
-            {
-                long sqdist = square(points[j].x - points[i].x)
-                                + square(points[j].y - points[i].y);
-                for (k = 0; k < 3; k++)
-                {
-                    if (sqdist < best_sqdists[k])
-                    {
-                        if (found < 2) found++;
-                        for (l = found; l > k; l--)
-                        {
-                            best_sqdists[l] = best_sqdists[l-1];
-                            bestes[l].src = bestes[l-1].src;
-                        }
-                        best_sqdists[k] = sqdist;
-                        bestes[k].src = j;
-                        for (l = 0; l <= found; l++)
-                        {
-                            LOG(("%d-st/nd/th shortest edge is %d-%d\n", l,
-                                bestes[l].src, bestes[l].tgt));
-                        }
-                        break;
-                    }
-                }
-            }
-        }
-        for (j = 0; j <= found; j++)
-        {
-            addedge(edges, bestes[j].src, bestes[j].tgt);
-#if DEBUG
-            assert(find234(edges, bestes + j, NULL));
-#endif
-            vertices[bestes[j].src].deg++;
-            vertices[bestes[j].tgt].deg++;
-        }
-    }
 }
 
 #ifdef BENCHMARKS
@@ -1118,8 +1068,6 @@ static char *new_game_desc(const game_params *params, random_state *rs,
             {
                 eext = snew(edge_ext);
                 eext->e = (edge) { j, k };
-                eext->dist = square((ulong) (pts_base[k].x - pts_base[j].x))
-                                + square((ulong) (pts_base[k].y - pts_base[j].y));
                 eext->degsum = vtcs_base[j].deg + vtcs_base[k].deg;
                 add234(eexts, eext);
             }
@@ -1127,9 +1075,9 @@ static char *new_game_desc(const game_params *params, random_state *rs,
 #if DEBUG
         for (j = 0; (eext = index234(eexts, j)) != NULL; j++)
         {
-            LOG(("Added extended edge with source %d, target %d, squared distance"\
-                " %lu and degree sum %d at position %ld to the 234-tree of extended"\
-                " edges\n", eext->e.src, eext->e.tgt, eext->dist, eext->degsum, j));
+            LOG(("Added extended edge with source %d, target %d and degree"\
+                "sum %d at position %ld to the 234-tree of extended edges\n",
+                eext->e.src, eext->e.tgt, eext->degsum, j));
         }
 #endif
         for (j = 0; (eext = index234(eexts, j)) != NULL; j++)
@@ -1210,13 +1158,18 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     sfree(coords_y);
 
     /* Add edges to the remaining points */
-    addedges_rempts_shodist(edges_base_234, vtcs_base, pts_base, n_min * n_sub, n_base);
+    addedges(edges_base_234, vtcs_base, pts_base, 0, n_base, n_min * n_sub, -1, n_base, 3,
+            rs);
 
 #if DEBUG
+    for (i = 0; i < n_min * n_sub; i++) {
+        vx = vtcs_base + i;
+        assert(vx->deg > 0);
+    }
     for (i = n_min * n_sub; i < n_base; i++)
     {
         vx = vtcs_base + i;
-        assert(vx->deg > 0);
+        assert(vx->deg == 3);
     }
 #endif
 
