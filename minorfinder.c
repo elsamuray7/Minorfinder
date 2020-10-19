@@ -873,8 +873,6 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     long* coords_x;
     long* coords_y;
     long* radii;
-    
-    double* angles;
 
     point* pt;
     point* pts_min;
@@ -890,12 +888,11 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     tree234* edges_base_234;
 
     subsizes = snewn(n_min, int);
-    tmp = 0;
     for (i = 0; i < n_min; i++)
     {
         subsizes[i] = 2;
-        tmp += 2;
     }
+    tmp = n_min * 2;
     while (tmp < n_base - (n_base % n_min))
     {
         subsizes[random_upto(rs, n_min)]++;
@@ -1035,6 +1032,7 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     {
         double rotation = (double) random_upto(rs, (100.0 * 2.0 * PI)
                             / (double) subsizes[i]) / 100.0;
+        double* angles;
         tmp = subsizes[i] * SUBGRAPH_POINTENTROPY;
         angles = snewn(tmp, double);
         for (j = 0; j < tmp; j++)
