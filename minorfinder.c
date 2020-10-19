@@ -1587,6 +1587,10 @@ static graph* parse_graph(const char** desc, int n, long lim, long mar)
     return ret;
 }
 
+/*
+ * Parse a subsize description that belongs to a graph, i.e. a string that specifies
+ * a set of subgraph indices and connects them to the size of the corresponding subgraph.
+ */
 static void parse_subsizes(const char** desc, graph* gr, int n_base, int n_min)
 {
     int idx, size;
