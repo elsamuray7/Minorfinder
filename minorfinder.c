@@ -919,28 +919,20 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     LOG(("\n"));
 #endif
 
-    tmp = coord_lim - (2 * COORDMARGIN);
-    pts_min = snewn(n_min, point);
     /* Arrange the minor points in a circle with radius circle_rad */
-    if (params->mode != WAGNER || n_min < 6)
+    pts_min = snewn(n_min, point);
+    tmp = coord_lim - (2 * COORDMARGIN);
+    for (i = 0; i < n_min; i++)
     {
-        for (i = 0; i < n_min; i++)
-        {
-            double angle = ((double) i * 2.0 * PI) / (double) n_min;
-            pt = pts_min + i;
-            pt->x = (((double) tmp / 2.0) + ((double) circle_rad * sin(angle)) + COORDMARGIN)
-                    * COORDUNIT;
-            pt->y = (((double) tmp / 2.0) + ((double) circle_rad * cos(angle)) + COORDMARGIN)
-                    * COORDUNIT;
-            pt->d = 1;
-            LOG(("Assigned coordinates x:%ld, y:%ld and denominator %ld to minor point %ld\n",
-                pt->x, pt->y, pt->d, i));
-        }
-    }
-    /* Arrange the minor points in two rows of three points each */
-    else
-    {
-        make_K_33_points(pts_min, coord_lim, n_min);
+        double angle = ((double) i * 2.0 * PI) / (double) n_min;
+        pt = pts_min + i;
+        pt->x = (((double) tmp / 2.0) + ((double) circle_rad * sin(angle)) + COORDMARGIN)
+                * COORDUNIT;
+        pt->y = (((double) tmp / 2.0) + ((double) circle_rad * cos(angle)) + COORDMARGIN)
+                * COORDUNIT;
+        pt->d = 1;
+        LOG(("Assigned coordinates x:%ld, y:%ld and denominator %ld to minor point %ld\n",
+            pt->x, pt->y, pt->d, i));
     }
 
     /* Add edges to the minor */
@@ -980,9 +972,9 @@ static char *new_game_desc(const game_params *params, random_state *rs,
      * the minimum of these two values is used to calculate the radius of a circular
      * subgraph area around the minor point.
      */
+    radii = snewn(n_min, long);
     tmp = COORDMARGIN * COORDUNIT;
     tmp2 = (coord_lim - COORDMARGIN) * COORDUNIT;
-    radii = snewn(n_min, long);
     if (params->mode != WAGNER || n_min < 6)
     {
         for (i = 0; i < n_min; i++)
@@ -1053,6 +1045,12 @@ static char *new_game_desc(const game_params *params, random_state *rs,
         sfree(angles);
     }
     sfree(radii);
+
+    /* Arrange the K_33 minor points in two rows of three points each */
+    if (params->mode == WAGNER && n_min == 6)
+    {
+        make_K_33_points(pts_min, coord_lim, n_min);
+    }
 
     /* Add edges to the subgraphs */
     vtcs_base = snewn(n_base, vertex);
