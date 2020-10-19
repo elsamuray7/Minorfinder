@@ -975,46 +975,15 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     radii = snewn(n_min, long);
     tmp = COORDMARGIN * COORDUNIT;
     tmp2 = (coord_lim - COORDMARGIN) * COORDUNIT;
-    if (params->mode != WAGNER || n_min < 6)
+    for (i = 0; i < n_min; i++)
     {
-        for (i = 0; i < n_min; i++)
-        {
-            pt = pts_min + i;
-            radii[i] = min(min(min(pt->x - tmp, pt->y - tmp), min(tmp2 - pt->x, tmp2 - pt->y)),
-                            (squarert(square(pts_min[1].x - pts_min[0].x) + square(pts_min[1].y
+        pt = pts_min + i;
+        radii[i] = min(min(min(pt->x - tmp, pt->y - tmp), min(tmp2 - pt->x, tmp2 - pt->y)),
+                        (squarert(square(pts_min[1].x - pts_min[0].x) + square(pts_min[1].y
                             - pts_min[0].y)) / 2)) - (SUBGRAPH_DISTANCE / 2);
-            LOG(("Assigned subgraph radius %ld to subgraph %ld\n", radii[i], i));
-        }
+        LOG(("Assigned subgraph radius %ld to subgraph %ld\n", radii[i], i));
     }
-    else
-    {
-        for (i = 0; i < n_min; i++)
-        {
-            pt = pts_min + i;
-            radii[i] = min(min(pt->x - tmp, pt->y - tmp), min(tmp2 - pt->x, tmp2 - pt->y))
-                        - (SUBGRAPH_DISTANCE / 2);
-            LOG(("Assigned subgraph radius %ld to subgraph %ld\n", radii[i], i));
-        }
-        for (i = 0; i < n_min - 1; i++)
-        {
-            for (j = i + 1; j < n_min; j++)
-            {
-                long radius = (squarert(square(pts_min[i].x - pts_min[j].x) + square(pts_min[i].y
-                                - pts_min[j].y)) / 2) - (SUBGRAPH_DISTANCE / 2);
-                if (radius < radii[i])
-                {
-                    radii[i] = radius;
-                    LOG(("Reassigned subgraph radius %ld to subgraph %ld\n", radii[i], i));
-                }
-                if (radius < radii[j])
-                {
-                    radii[j] = radius;
-                    LOG(("Reassigned subgraph radius %ld to subgraph %ld\n", radii[j], j));
-                }
-            }
-        }
-    }
-
+    
     /*
      * Assign coordinates to the subgraphs. The coordinates must lie in the previously
      * calculated subgraph areas.
