@@ -2893,7 +2893,7 @@ static char *interpret_move(const game_state *state, game_ui *ui,
             {
                 if (vx->idx == ui->dragpt) continue;
                 pt = pts + vx->idx;
-                if (square(ui->newpt.x - pt->x) + square(ui->newpt.y - pt->y) < OVERLAYPOINT_TRESHOLD_MOVEINT)
+                if (point_heuristic(ui->newpt.x, ui->newpt.y, pt->x, pt->y) < OVERLAYPOINT_TRESHOLD_MOVEINT)
                 {
                     if (ui->current_move == MOVE_DRAGPOINT
                         && isedge(edges, ui->dragpt, vx->idx))
@@ -2942,15 +2942,24 @@ static char *interpret_move(const game_state *state, game_ui *ui,
                     LOG(("Unselected drag point\n"));
                     return UI_UPDATE;
                 }
-                else
+                for (i = 0; (vx = index234(vertices, i)) != NULL; i++)
                 {
-                    char buf[80];
-                    sprintf(buf, "%d:%d-%ld-%ld;", ui->current_move, ui->dragpt, ui->newpt.x,
-                            ui->newpt.y);
-                    LOG(("Dragging point %d to position x:%ld, y:%ld\n", ui->dragpt, ui->newpt.x,
-                        ui->newpt.y));
-                    return dupstr(buf);
+                    if (vx->idx == ui->dragpt) continue;
+                    pt = pts + vx->idx;
+                    if (point_heuristic(ui->newpt.x, ui->newpt.y, pt->x, pt->y) < OVERLAYPOINT_TRESHOLD_MOVEINT)
+                    {
+                        ui->current_move = MOVE_IDLE;
+                        ui->dragpt = -1;
+                        LOG(("Unselected drag point\n"));
+                        return UI_UPDATE;
+                    }
                 }
+                char buf[80];
+                sprintf(buf, "%d:%d-%ld-%ld;", ui->current_move, ui->dragpt, ui->newpt.x,
+                        ui->newpt.y);
+                LOG(("Dragging point %d to position x:%ld, y:%ld\n", ui->dragpt, ui->newpt.x,
+                    ui->newpt.y));
+                return dupstr(buf);
             /*
              * Check for an ongoing contraction. If yes, check whether the player wants
              * to discard the contraction. If no => make move, else => discard and update
@@ -3394,6 +3403,15 @@ static void game_redraw(drawing *dr, game_drawstate *ds,
         point psrc, ptgt;
         point* oesrc;
         point* oetgt;
+        /*
+         * Check whether the edge or one of its incident vertices is being deleted.
+         * Draw the edge after all other edges have been drawn if so.
+         */
+        if ((ui->deledge.src == e->src && ui->deledge.tgt == e->tgt)
+            || ui->delvx == e->src || ui->delvx == e->tgt)
+        {
+            continue;
+        }
         esrc = pts + e->src;
         etgt = pts + e->tgt;
         /*
@@ -3440,10 +3458,42 @@ static void game_redraw(drawing *dr, game_drawstate *ds,
             ptgt.x = (etgt->x + bxoff) * brelsize * ds->tilesize / COORDUNIT;
             ptgt.y = (etgt->y + byoff) * brelsize * ds->tilesize / COORDUNIT;
         }
-        draw_line(dr, psrc.x, psrc.y, ptgt.x, ptgt.y,
-                    ((e->src == ui->deledge.src && e->tgt == ui->deledge.tgt)
-                    || e->src == ui->delvx || e->tgt == ui->delvx) ?
-                    COL_DELEDGE : (hide ? COL_HIDEEDGE : COL_EDGE));
+        draw_line(dr, psrc.x, psrc.y, ptgt.x, ptgt.y, hide ? COL_HIDEEDGE : COL_EDGE);
+    }
+    /*
+     * If an edge deletion is ongoing draw the edge to delete. The edge is drawn
+     * last such that it overlays all other edges.
+     */
+    if (ui->deledge.src > -1 && ui->deledge.tgt > -1)
+    {
+        point psrc;
+        point ptgt;
+        psrc.x = (pts[ui->deledge.src].x + bxoff) * brelsize * ds->tilesize / COORDUNIT;
+        psrc.y = (pts[ui->deledge.src].y + byoff) * brelsize * ds->tilesize / COORDUNIT;
+        ptgt.x = (pts[ui->deledge.tgt].x + bxoff) * brelsize * ds->tilesize / COORDUNIT;
+        ptgt.y = (pts[ui->deledge.tgt].y + byoff) * brelsize * ds->tilesize / COORDUNIT;
+        draw_line(dr, psrc.x, psrc.y, ptgt.x, ptgt.y, COL_DELEDGE);
+    }
+    /*
+     * If an vertex deletion is ongoing draw the edges that are incident to
+     * this vertex. The edges are drawn last such that they overlay all other
+     * edges.
+     */
+    else if (ui->delvx > -1)
+    {
+        for (i = 0; (e = index234(state->base->edges, i)) != NULL; i++)
+        {
+            if (ui->delvx == e->src || ui->delvx == e->tgt)
+            {
+                point psrc;
+                point ptgt;
+                psrc.x = (pts[e->src].x + bxoff) * brelsize * ds->tilesize / COORDUNIT;
+                psrc.y = (pts[e->src].y + byoff) * brelsize * ds->tilesize / COORDUNIT;
+                ptgt.x = (pts[e->tgt].x + bxoff) * brelsize * ds->tilesize / COORDUNIT;
+                ptgt.y = (pts[e->tgt].y + byoff) * brelsize * ds->tilesize / COORDUNIT;
+                draw_line(dr, psrc.x, psrc.y, ptgt.x, ptgt.y, COL_DELEDGE);
+            }
+        }
     }
     /* Draw the base graph points in the intended grid */
     for (i = 0; (vx = index234((dir > 0 && oldstate) ? oldstate->base->vertices :
@@ -3460,7 +3510,7 @@ static void game_redraw(drawing *dr, game_drawstate *ds,
         {
             continue;
         }
-        else if (oldstate)
+        if (oldstate)
         {
             op = oldstate->base->points + vx->idx;
             p.x = (op->x + ((float) (pts[vx->idx].x - op->x) * r_anim) + bxoff)
