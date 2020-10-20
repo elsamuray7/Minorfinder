@@ -751,7 +751,7 @@ static void make_K_33_points(point* points, long clim, int n)
 }
 
 /*
- * Extended edge. Stores a value proportional and the degree sum of its incident
+ * Extended edge. Extends an edge by the degree sum of its incident
  * vertices.
  */
 typedef struct edge_ext {
