@@ -144,13 +144,13 @@ typedef struct graph {
 } graph;
 
 enum game_mode {
-    NORMAL,
-    WAGNER
+    DEFAULT,
+    SPECIAL
 };
 
 struct game_params {
 
-    /* either NORMAL or WAGNER mode */
+    /* either DEFAULT or SPECIAL mode */
     enum game_mode mode;
 
     /* number of base graph points */
@@ -161,18 +161,18 @@ struct game_params {
 
 };
 
-const struct game_params normal_presets[] = {
-    { NORMAL, 15, 4 },
-    { NORMAL, 19, 5 },
-    { NORMAL, 23, 6 }
+const struct game_params default_presets[] = {
+    { DEFAULT, 15, 4 },
+    { DEFAULT, 19, 5 },
+    { DEFAULT, 23, 6 }
 };
 
-const struct game_params wagner_presets[] = {
-    { WAGNER, 19, 5 },
-    { WAGNER, 23, 6 }
+const struct game_params special_presets[] = {
+    { SPECIAL, 19, 5 },
+    { SPECIAL, 23, 6 }
 };
 
-#define DEFAULT_PRESET normal_presets[0]
+#define DEFAULT_PRESET default_presets[0]
 
 struct game_state {
 
@@ -203,22 +203,22 @@ struct preset_menu* preset_menu(void)
     int i;
     struct preset_menu* ret = preset_menu_new();
 
-    sprintf(buf, "Normal");
-    struct preset_menu* normal = preset_menu_add_submenu(ret, dupstr(buf));
-    for (i = 0; i < lenof(normal_presets); i++)
+    sprintf(buf, "Default");
+    struct preset_menu* _default = preset_menu_add_submenu(ret, dupstr(buf));
+    for (i = 0; i < lenof(default_presets); i++)
     {
         game_params* params = default_params();
-        *params = normal_presets[i];
+        *params = default_presets[i];
         sprintf(buf, "%d base, %d minor points", params->n_base, params->n_min);
-        preset_menu_add_preset(normal, dupstr(buf), params);
+        preset_menu_add_preset(_default, dupstr(buf), params);
     }
 
-    sprintf(buf, "Wagner");
-    struct preset_menu* wagner = preset_menu_add_submenu(ret, dupstr(buf));
-    for (i = 0; i < lenof(wagner_presets); i++)
+    sprintf(buf, "Special");
+    struct preset_menu* special = preset_menu_add_submenu(ret, dupstr(buf));
+    for (i = 0; i < lenof(special_presets); i++)
     {
         game_params* params = default_params();
-        *params = wagner_presets[i];
+        *params = special_presets[i];
         switch (params->n_min)
         {
             case 5:
@@ -229,7 +229,7 @@ struct preset_menu* preset_menu(void)
                 break;
             default:;
         }
-        preset_menu_add_preset(wagner, dupstr(buf), params);
+        preset_menu_add_preset(special, dupstr(buf), params);
     }
 
     return ret;
@@ -284,20 +284,20 @@ static const char *validate_params(const game_params *params, bool full)
 {
     switch (params->mode)
     {
-        case NORMAL:
-            if (params->n_base < normal_presets[0].n_base
-                || params->n_base > normal_presets[lenof(normal_presets)-1].n_base)
+        case DEFAULT:
+            if (params->n_base < default_presets[0].n_base
+                || params->n_base > default_presets[lenof(default_presets)-1].n_base)
                 return "Number of base graph points is invalid";
-            else if (params->n_min < normal_presets[0].n_min
-                || params->n_min > normal_presets[lenof(normal_presets)-1].n_min)
+            else if (params->n_min < default_presets[0].n_min
+                || params->n_min > default_presets[lenof(default_presets)-1].n_min)
                 return "Number of minor points is invalid";
             break;
-        case WAGNER:
-            if (params->n_base < wagner_presets[0].n_base
-                || params->n_base > wagner_presets[lenof(wagner_presets)-1].n_base)
+        case SPECIAL:
+            if (params->n_base < special_presets[0].n_base
+                || params->n_base > special_presets[lenof(special_presets)-1].n_base)
                 return "Number of base graph points is invalid";
-            else if (params->n_min < wagner_presets[0].n_min
-                || params->n_min > wagner_presets[lenof(wagner_presets)-1].n_min)
+            else if (params->n_min < special_presets[0].n_min
+                || params->n_min > special_presets[lenof(special_presets)-1].n_min)
                 return "Number of minor points is invalid";
             break;
         default:;
@@ -946,11 +946,11 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     edges_min_234 = newtree234(edgecmp);
     switch (params->mode)
     {
-        case NORMAL:
+        case DEFAULT:
             addedges(edges_min_234, vtcs_min, pts_min, 0, n_min, n_min - 2, 0, -1, -1, n_min,
                     rs);
             break;
-        case WAGNER:
+        case SPECIAL:
             switch (n_min) {
                 case 5:
                     make_K_5_edges(edges_min_234, vtcs_min, n_min);
@@ -1016,7 +1016,7 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     sfree(radii);
 
     /* Arrange the K_33 minor points in two rows of three points each */
-    if (params->mode == WAGNER && n_min == 6)
+    if (params->mode == SPECIAL && n_min == 6)
     {
         make_K_33_points(pts_min, coord_lim, n_min);
     }
