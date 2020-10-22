@@ -843,9 +843,9 @@ static void calc_basegraph_dissim(tree234* curr_base_edges, point* curr_base_pts
             if (moved) GraphDissim += COST_MOVEPOINT;
             else GraphDissim += COST_SWITCHIDCS;
         }
+        sfree(LastBasePts);
         while ((e = delpos234(LastBaseEdges, 0)) != NULL) sfree(e);
         freetree234(LastBaseEdges);
-        sfree(LastBasePts);
     }
 
     LastBaseEdges = curr_base_edges;
