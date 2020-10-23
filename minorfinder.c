@@ -871,12 +871,13 @@ static void calc_basegraph_dissim(tree234* curr_base_edges, point* curr_base_pts
         freetree234(LastBaseEdges);
     }
 
+    LastNBase = curr_n_base;
+    LastNMin = curr_n_min;
     LastSubsizes = curr_subsizes;
     LastSuboffs = curr_suboffs;
     LastBaseEdges = curr_base_edges;
     LastBasePts = curr_base_pts;
-    LastNBase = curr_n_base;
-    LastNMin = curr_n_min;
+
 }
 #endif
 
