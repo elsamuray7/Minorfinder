@@ -782,40 +782,77 @@ static int eextcmp(void *av, void *bv)
 
 #ifdef BENCHMARKS
 /*
- * Costs for visible changes to the graph to transform one into the other. Although edges are
- * moved together with their incident vertices we count that as two visible changes. One to the
- * vertex itself and one to the set of its incident edges.
+ * Costs for visible changes to the graph to transform one into the other
  */
-#define COST_SWITCHIDCS 1
-#define COST_MOVEPOINT 2
-#define COST_ADDEDGE 1
-#define COST_DELEDGE 1
+enum cost {
+    COST_MOVEPOINT = 1,
+    COST_ADDVERTEX = 1,
+    COST_DELVERTEX = 1,
+    COST_ADDEDGE = 1,
+    COST_DELEDGE = 1
+};
 
 static int LastNBase = 0;
 static int LastNMin = 0;
+static int GraphDissim = 0;
+static int* LastSubsizes = NULL;
+static int* LastSuboffs = NULL;
 static tree234* LastBaseEdges = NULL;
 static point* LastBasePts = NULL;
 
-static int GraphDissim = 0;
-
 /*
  * Calculate the dissimilarity of the base graphs between two game generations by comparing their
- * edges and vertices and summing up the predefined costs for the three operations add edge, delete
- * edge and move point that are required to transform the previous graph into the current.
+ * points/vertices and edges and summing up the predefined costs for the required operations to
+ * transform the old base graph into the new one. This function overestimates the dissimilarity.
  */
-static void calc_basegraph_dissim(tree234* curr_base_edges, point* curr_base_pts, int curr_n_base,
-                                int curr_n_min)
+static void calc_basegraph_dissim(tree234* curr_base_edges, point* curr_base_pts, int* curr_subsizes,
+                                int* curr_suboffs, int curr_n_base, int curr_n_min)
 {
-    int i, j;
+    int i, j, k;
     point* last_pt;
     point* curr_pt;
     edge* e;
 
     GraphDissim = 0;
 
-    if (LastBaseEdges && LastBasePts && LastNBase && LastNMin
-        && LastNBase == curr_n_base && LastNMin == curr_n_min)
+    if (LastBaseEdges && LastBasePts && LastNBase && LastNMin && LastSubsizes
+        && LastSuboffs && LastNBase == curr_n_base && LastNMin == curr_n_min)
     {
+        /* calculate subgraph vertices/points dissimilarity */
+        for (i = 0; i < curr_n_min; i++)
+        {
+            if (curr_subsizes[i] < LastSubsizes[i])
+                GraphDissim += (LastSubsizes[i] - curr_subsizes[i]) * COST_DELVERTEX;
+            else if (curr_subsizes[i] > LastSubsizes[i])
+                GraphDissim += (curr_subsizes[i] - LastSubsizes[i]) * COST_ADDVERTEX;
+            for (j = curr_suboffs[i]; j < curr_suboffs[i+1]; j++)
+            {
+                bool moved = true;
+                for (k = LastSuboffs[i]; k < LastSuboffs[i+1]; k++)
+                {
+                    if (j == k) continue;
+                    if (!(moved = !(curr_base_pts[j].x == LastBasePts[k].x
+                        && curr_base_pts[j].y == LastBasePts[k].y)))
+                        break;
+                }
+                if (moved) GraphDissim += COST_MOVEPOINT;
+            }
+        }
+        /* calculate remaining points dissimilarity */
+        for (i = curr_suboffs[curr_n_min]; i < curr_n_base; i++)
+        {
+            bool moved = true;
+            curr_pt = curr_base_pts + i;
+            for (j = LastSuboffs[LastNMin]; j < LastNBase; j++)
+            {
+                if (i == j) continue;
+                last_pt = LastBasePts + j;
+                if (!(moved = !(curr_pt->x == last_pt->x && curr_pt->y == last_pt->y)))
+                    break;
+            }
+            if (moved) GraphDissim += COST_MOVEPOINT;
+        }
+        /* calculate edges dissimilarity */
         for (i = 0; (e = index234(curr_base_edges, i)) != NULL; i++)
         {
             if (find234(LastBaseEdges, e, NULL) == NULL)
@@ -826,28 +863,16 @@ static void calc_basegraph_dissim(tree234* curr_base_edges, point* curr_base_pts
             if (find234(curr_base_edges, e, NULL) == NULL)
                 GraphDissim += COST_DELEDGE;
         }
-        for (i = 0; i < LastNBase; i++)
-        {
-            bool moved = true;
-            last_pt = LastBasePts + i;
-            for (j = 0; j < LastNBase; j++)
-            {
-                curr_pt = curr_base_pts + j;
-                if (curr_pt->x == last_pt->x
-                    && curr_pt->y == last_pt->y)
-                {
-                    moved = false;
-                    break;
-                }
-            }
-            if (moved) GraphDissim += COST_MOVEPOINT;
-            else GraphDissim += COST_SWITCHIDCS;
-        }
+
+        sfree(LastSubsizes);
+        sfree(LastSuboffs);
         sfree(LastBasePts);
         while ((e = delpos234(LastBaseEdges, 0)) != NULL) sfree(e);
         freetree234(LastBaseEdges);
     }
 
+    LastSubsizes = curr_subsizes;
+    LastSuboffs = curr_suboffs;
     LastBaseEdges = curr_base_edges;
     LastBasePts = curr_base_pts;
     LastNBase = curr_n_base;
@@ -1308,8 +1333,6 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     }
     }
 
-    sfree(subsizes);
-    sfree(suboffs);
     sfree(vtcs_min);
     sfree(pts_min);
     while ((e = delpos234(edges_min_234, 0)) != NULL) sfree(e);
@@ -1317,11 +1340,13 @@ static char *new_game_desc(const game_params *params, random_state *rs,
 
     sfree(vtcs_base);
 #ifndef BENCHMARKS
+    sfree(subsizes);
+    sfree(suboffs);
     sfree(pts_base);
     while ((e = delpos234(edges_base_234, 0)) != NULL) sfree(e);
     freetree234(edges_base_234);
 #else
-    calc_basegraph_dissim(edges_base_234, pts_base, n_base, n_min);
+    calc_basegraph_dissim(edges_base_234, pts_base, subsizes, suboffs, n_base, n_min);
     if (GraphDissim)
         printf("Base graph dissimiliarity between the last two game generations is %d\n",
                 GraphDissim);
