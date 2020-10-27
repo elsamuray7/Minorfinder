@@ -1042,14 +1042,14 @@ static void calc_gamegen_runtime(clock_t begin, clock_t end, const game_params c
         {
             if (GameGenRuntimeIterModN == lenof(GameGenRuntimeLastN)-1)
             {
-                fprintf(GGRReport, "%lu\t%.2lf\t%s\n", GameGenRuntimeAvgIdx, GameGenRuntimeAvg,
-                        encode_params(&curr_params, true));
+                _GGRReport = fprintf(GGRReport, "%lu\t%.2lf\t%s\n", GameGenRuntimeAvgIdx, GameGenRuntimeAvg,
+                                    encode_params(&curr_params, true));
             }
             else
             {
-                fprintf(GGRReport, "%lu\t%.2lf\t%s\t%.2lf\n", GameGenRuntimeAvgIdx, GameGenRuntimeAvg,
-                        encode_params(&GGRLastParams, true),
-                        (double) (GameGenRuntimeIterModN+1) / (double) lenof(GameGenRuntimeLastN));
+                _GGRReport = fprintf(GGRReport, "%lu\t%.2lf\t%s\t%.2lf\n", GameGenRuntimeAvgIdx, GameGenRuntimeAvg,
+                                    encode_params(&GGRLastParams, true),
+                                    (double) (GameGenRuntimeIterModN+1) / (double) lenof(GameGenRuntimeLastN));
                 GameGenRuntimeLastN[0] = GameGenRuntimeIterModN+1;
                 GameGenRuntimeIterModN = 0;
             }
