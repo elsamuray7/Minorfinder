@@ -455,12 +455,12 @@ static bool crosspoint(point s, point t, point p)
 }
 
 /*
- * Add edges between the vertices in the range [offa, offa + cnta] and vertices in the range
- * [offb, offb + cntb]. Make sure that edges don't cross other edges or points and the degree
- * of the involved vertices doesn't increase beyond max_deg.
+ * Add edges between the vertices in the range [offa, offa + cnta] and vertices
+ * in the range [offb, offb + cntb]. Make sure that edges don't cross other edges
+ * or points and the degree of the involved vertices doesn't increase beyond max_deg.
  */
 static void addedges(tree234* edges, vertex* vertices, point* points, int offa, int cnta,
-                    int maxdega, int offb, int cntb, int maxdegb, const int n, random_state* rs)
+                    int maxdega, int offb, int cntb, int maxdegb, const int n,random_state* rs)
 {
     bool* contains;
     int i;
@@ -529,11 +529,12 @@ static void addedges(tree234* edges, vertex* vertices, point* points, int offa, 
     }
     
     /*
-     * Start adding edges. Pick the lowest degree vertex from the range a 234-tree and a
-     * random vertex from the range b 234-tree and try to add an edge between them.
-     * If the edge can't be added delete the range b vertex from the corresponding 234-tree.
-     * Otherwise add the edge and update the involved vertices in the range a 234-tree and
-     * all range b 234-trees. Repeat until there are no more edges to add.
+     * Start adding edges. Pick the lowest degree vertex from the range a 234-tree
+     * and a random vertex from the range b 234-tree and try to add an edge between
+     * them. If the edge can't be added delete the range b vertex from the correspon-
+     * ding 234-tree. Otherwise add the edge and update the involved vertices in the
+     * range a 234-tree and all range b 234-trees. Repeat until there are no more edges
+     * to add.
      */
     while (count234(vtcsa))
     {
@@ -780,7 +781,36 @@ static int eextcmp(void *av, void *bv)
     return eextcmpC(av, bv);
 }
 
+/*
+ * The following structures and methods are only relevant for benchmark tests.
+ * 
+ * Currently implemented benchamrk tests:
+ *     - Base graph dissimilarity calculation between game generations
+ *          (per iteration & average) => graph_dissim.bench
+ *     - Game generation runtime calculation (per iteration & average)
+ *          => gamegen_runtime.bench
+ * 
+ * For every implemented benchmark test there is a report file that collects the
+ * respective test data.
+ */
 #ifdef BENCHMARKS
+/*
+ * A time unit by its second-based multiplier
+ */
+enum time_unit {
+    SECS = 1,
+    MILLISECS = SECS * 1000,
+    MICROSECS = MILLISECS * 1000,
+};
+
+/*
+ * Calculate the time between the given begin and end timestamps in the given unit
+ */
+static double calc_runtime(clock_t begin, clock_t end, enum time_unit unit)
+{
+    return (double) ((end - begin) * unit) / CLOCKS_PER_SEC;
+}
+
 /*
  * Costs for visible changes to the graph to transform one into the other
  */
@@ -792,34 +822,43 @@ enum cost {
     COST_DELEDGE = 1
 };
 
-static int LastNBase = 0;
-static int LastNMin = 0;
-static int GraphDissim = 0;
+#define N_GRAPHDISSIM 100
+
+static int GraphDissim = -1;
+static int GraphDissimIterModN = 0;
+static int GraphDissimLastN[N_GRAPHDISSIM];
+static ulong GraphDissimAvgIdx = 0;
+static int GraphDissimAvg = 0;
+
+static game_params GDLastParams = {};
 static int* LastSubsizes = NULL;
 static int* LastSuboffs = NULL;
-static tree234* LastBaseEdges = NULL;
 static point* LastBasePts = NULL;
+static tree234* LastBaseEdges = NULL;
+
+static int _GDReport = 0;
+static FILE* GDReport = NULL;
 
 /*
- * Calculate the dissimilarity of the base graphs between two game generations by comparing their
- * points/vertices and edges and summing up the predefined costs for the required operations to
- * transform the old base graph into the new one. This function overestimates the dissimilarity.
+ * Calculate the dissimilarity of the base graphs between two game generations
+ * by comparing their points/vertices and edges and summing up the predefined
+ * costs for the required operations to transform the old base graph into the
+ * new one. This function overestimates the dissimilarity because it does not
+ * consider vertex or edge substitutions.
  */
-static void calc_basegraph_dissim(tree234* curr_base_edges, point* curr_base_pts, int* curr_subsizes,
-                                int* curr_suboffs, int curr_n_base, int curr_n_min)
+static void calc_graphdissim(tree234* curr_base_edges, point* curr_base_pts, int* curr_subsizes,
+                            int* curr_suboffs, const game_params curr_params)
 {
     int i, j, k;
     point* last_pt;
     point* curr_pt;
     edge* e;
 
-    GraphDissim = 0;
-
-    if (LastBaseEdges && LastBasePts && LastNBase && LastNMin && LastSubsizes
-        && LastSuboffs && LastNBase == curr_n_base && LastNMin == curr_n_min)
+    if (LastBaseEdges && LastBasePts && LastSubsizes && LastSuboffs
+        && curr_params.mode == GDLastParams.mode && curr_params.n_base == GDLastParams.n_base)
     {
         /* calculate subgraph vertices/points dissimilarity */
-        for (i = 0; i < curr_n_min; i++)
+        for (i = 0; i < curr_params.n_min; i++)
         {
             if (curr_subsizes[i] < LastSubsizes[i])
                 GraphDissim += (LastSubsizes[i] - curr_subsizes[i]) * COST_DELVERTEX;
@@ -839,11 +878,11 @@ static void calc_basegraph_dissim(tree234* curr_base_edges, point* curr_base_pts
             }
         }
         /* calculate remaining points dissimilarity */
-        for (i = curr_suboffs[curr_n_min]; i < curr_n_base; i++)
+        for (i = curr_suboffs[curr_params.n_min]; i < curr_params.n_base; i++)
         {
             bool moved = true;
             curr_pt = curr_base_pts + i;
-            for (j = LastSuboffs[LastNMin]; j < LastNBase; j++)
+            for (j = LastSuboffs[GDLastParams.n_min]; j < GDLastParams.n_base; j++)
             {
                 if (i == j) continue;
                 last_pt = LastBasePts + j;
@@ -871,13 +910,156 @@ static void calc_basegraph_dissim(tree234* curr_base_edges, point* curr_base_pts
         freetree234(LastBaseEdges);
     }
 
-    LastNBase = curr_n_base;
-    LastNMin = curr_n_min;
+    if (GraphDissim >= 0)
+    {
+        if (GraphDissim)
+        {
+            printf("Base graph dissimilarity iteration number: %d\n", GraphDissimIterModN);
+            printf("Base graph dissimilarity between the last two game generations is %d\n",
+                    GraphDissim);
+            GraphDissimLastN[GraphDissimIterModN] = GraphDissim;
+        }
+        else
+        {
+            GraphDissimIterModN--;
+        }
+        if ((GraphDissimIterModN > 0) /* not initial call */
+            && (!GraphDissim /* break average */
+            || GraphDissimIterModN == lenof(GraphDissimLastN)-1)) /* average for N_GRAPHDISSIM */
+        {
+            GraphDissimAvg = 0;
+            for (i = 0; i <= GraphDissimIterModN; i++)
+            {
+                GraphDissimAvg += GraphDissimLastN[i];
+            }
+            GraphDissimAvg /= GraphDissimIterModN+1;
+            printf("\n\nAverage base graph dissimilarity over the last %d game generations"\
+                    " is %d\n\n\n", GraphDissimIterModN+1, GraphDissimAvg);
+            if (!GDReport) {
+                GDReport = fopen("graph_dissim.bench", "w");
+                _GDReport = fprintf(GDReport,
+                                    "Begin Timestamp\t\t%d\n"\
+                                    "Accuracy / Loop\t\t%lu\n"\
+                                    "Measured in\t\tTransformation Cost\n\n\n"\
+                                    "Index\tValue\tParams\tBreak\n",
+                                    (int) time(NULL), lenof(GraphDissimLastN));
+                if (_GDReport == EOF) fclose(GDReport);
+            }
+            else if (_GDReport > EOF)
+            {
+                GDReport = fopen("graph_dissim.bench", "a");
+            }
+            if (_GDReport > EOF)
+            {
+                if (GraphDissimIterModN == lenof(GraphDissimLastN)-1)
+                    _GDReport = fprintf(GDReport, "%lu\t%d\t%s\n", GraphDissimAvgIdx, GraphDissimAvg,
+                                        encode_params(&curr_params, true));
+                else
+                    _GDReport = fprintf(GDReport, "%lu\t%d\t%s\t%.2lf\n", GraphDissimAvgIdx, GraphDissimAvg,
+                                        encode_params(&GDLastParams, true),
+                                        (double) (GraphDissimIterModN+1) / (double) lenof(GraphDissimLastN));
+                fclose(GDReport);
+                GraphDissimAvgIdx++;
+            }
+        }
+        if (GraphDissim)
+        {
+            GraphDissim = 0;
+            GraphDissimIterModN = (GraphDissimIterModN+1) % lenof(GraphDissimLastN);
+        }
+        else if (GraphDissimIterModN)
+        {
+            GraphDissimIterModN = 0;
+        }
+    }
+    else if (GraphDissim == -1)
+    {
+        GraphDissim++;
+    }
+
+    GDLastParams = curr_params;
     LastSubsizes = curr_subsizes;
     LastSuboffs = curr_suboffs;
-    LastBaseEdges = curr_base_edges;
     LastBasePts = curr_base_pts;
+    LastBaseEdges = curr_base_edges;
+}
 
+#define N_GAMEGENRUNTIME 500
+
+static double GameGenRuntime = 0.;
+static int GameGenRuntimeIterModN = 0;
+static double GameGenRuntimeLastN[N_GAMEGENRUNTIME];
+static ulong GameGenRuntimeAvgIdx = 0;
+static double GameGenRuntimeAvg = 0.;
+
+static game_params GGRLastParams = {};
+
+static int _GGRReport = 0;
+static FILE* GGRReport = NULL;
+
+/*
+ * Calculate the runtime of the generation of a new game by measuring the difference
+ * between the timestamps begin and end
+ */
+static void calc_gamegen_runtime(clock_t begin, clock_t end, const game_params curr_params)
+{
+    int i;
+    
+    GameGenRuntime = calc_runtime(begin, end, MICROSECS);
+    printf("Game generation runtime iteration number: %d\n", GameGenRuntimeIterModN);
+    printf("Game generation runtime is %.2lf \xc2\xb5s\n", GameGenRuntime);
+    GameGenRuntimeLastN[GameGenRuntimeIterModN] = GameGenRuntime;
+    if ((GameGenRuntimeIterModN > 0) /* not initial call */
+        && (curr_params.mode != GGRLastParams.mode || curr_params.n_base != GGRLastParams.n_base /* break average */
+        || GameGenRuntimeIterModN == lenof(GameGenRuntimeLastN)-1)) /* average for N_GAMEGENRUNTIME */
+    {
+        GameGenRuntimeAvg = 0.;
+        if (GameGenRuntimeIterModN < lenof(GameGenRuntimeLastN)-1)
+            GameGenRuntimeIterModN--;
+        for (i = 0; i <= GameGenRuntimeIterModN; i++)
+        {
+            GameGenRuntimeAvg += GameGenRuntimeLastN[i];
+        }
+        GameGenRuntimeAvg /= (double) (GameGenRuntimeIterModN+1);
+        printf("\n\nAvarage game generation runtime over the last %d game generations"\
+                " is %.2lf \xc2\xb5s\n\n\n", GameGenRuntimeIterModN+1, GameGenRuntimeAvg);
+        if (!GGRReport)
+        {
+            GGRReport = fopen("gamegen_runtime.bench", "w");
+            _GGRReport = fprintf(GGRReport,
+                                "Begin Timestamp\t\t%d\n"\
+                                "Accuracy / Loop\t\t%lu\n"\
+                                "Measured in\t\t\xc2\xb5s\n\n\n"\
+                                "Index\tValue\tParams\tBreak\n",
+                                (int) time(NULL), lenof(GameGenRuntimeLastN));
+            if (_GGRReport == EOF) fclose(GGRReport);
+        }
+        else if (_GGRReport > EOF)
+        {
+            GGRReport = fopen("gamegen_runtime.bench", "a");
+        }
+        if (_GGRReport > EOF)
+        {
+            if (GameGenRuntimeIterModN == lenof(GameGenRuntimeLastN)-1)
+            {
+                fprintf(GGRReport, "%lu\t%.2lf\t%s\n", GameGenRuntimeAvgIdx, GameGenRuntimeAvg,
+                        encode_params(&curr_params, true));
+            }
+            else
+            {
+                fprintf(GGRReport, "%lu\t%.2lf\t%s\t%.2lf\n", GameGenRuntimeAvgIdx, GameGenRuntimeAvg,
+                        encode_params(&GGRLastParams, true),
+                        (double) (GameGenRuntimeIterModN+1) / (double) lenof(GameGenRuntimeLastN));
+                GameGenRuntimeLastN[0] = GameGenRuntimeIterModN+1;
+                GameGenRuntimeIterModN = 0;
+            }
+            fclose(GGRReport);
+            GameGenRuntimeAvgIdx++;
+        }
+    }
+    GameGenRuntimeIterModN = (GameGenRuntimeIterModN+1) % lenof(GameGenRuntimeLastN);
+
+    GGRLastParams = curr_params;
 }
 #endif
 
@@ -912,6 +1094,10 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     tree234* tmp_234;
     tree234* edges_min_234;
     tree234* edges_base_234;
+
+#ifdef BENCHMARKS
+    clock_t begin = clock();
+#endif
 
     subsizes = snewn(n_min, int);
     for (i = 0; i < n_min; i++)
@@ -1347,10 +1533,10 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     while ((e = delpos234(edges_base_234, 0)) != NULL) sfree(e);
     freetree234(edges_base_234);
 #else
-    calc_basegraph_dissim(edges_base_234, pts_base, subsizes, suboffs, n_base, n_min);
-    if (GraphDissim)
-        printf("Base graph dissimiliarity between the last two game generations is %d\n",
-                GraphDissim);
+    calc_graphdissim(edges_base_234, pts_base, subsizes, suboffs, *params);
+
+    clock_t end = clock();
+    calc_gamegen_runtime(begin, end, *params);
 #endif
     freetree234(tmp_234);
 

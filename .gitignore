@@ -139,3 +139,5 @@
 /.vscode
 
 minorfinder_savefile
+
+*.bench
