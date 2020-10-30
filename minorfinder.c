@@ -789,6 +789,8 @@ static int eextcmp(void *av, void *bv)
  *          (per iteration & average) => graph_dissim.bench
  *     - Game generation runtime calculation (per iteration & average)
  *          => gamegen_runtime.bench
+ *     - Isomorphism test runtime calculation (per iteration & average)
+ *          => isotest_degheur_runtime.bench
  * 
  * For every implemented benchmark test there is a report file that collects the
  * respective test data.
@@ -801,7 +803,23 @@ enum time_unit {
     SECS = 1,
     MILLISECS = SECS * 1000,
     MICROSECS = MILLISECS * 1000,
+    NANOSECS = MICROSECS * 1000
 };
+
+/*
+ * Convert an enum `time_unit` to its string representation
+ */
+static const char* time_unit_str(enum time_unit unit)
+{
+    switch (unit)
+    {
+        case SECS: return "s";
+        case MILLISECS: return "ms";
+        case MICROSECS: return "\xc2\xb5s";
+        case NANOSECS: return "ns";
+        default: return NULL;
+    }
+}
 
 /*
  * Calculate the time between the given begin and end timestamps in the given unit
@@ -809,6 +827,69 @@ enum time_unit {
 static double calc_runtime(clock_t begin, clock_t end, enum time_unit unit)
 {
     return (double) ((end - begin) * unit) / CLOCKS_PER_SEC;
+}
+
+/*
+ * Write an average runtime report to a text file
+ */
+static void write_runtime_report(double Runtime, enum time_unit unit, int N, int* RuntimeIterModN,
+            double RuntimeLastN[], ulong* RuntimeAvgIdx, double* RuntimeAvg, game_params* LastParams,
+            int* _Report, FILE** Report, const char* fn, time_t BeginTimestamp, const game_params curr_params)
+{
+    int i;
+
+    RuntimeLastN[*RuntimeIterModN] = Runtime;
+    if ((*RuntimeIterModN > 0) /* not initial call */
+        && (curr_params.mode != LastParams->mode || curr_params.n_base != LastParams->n_base /* break average */
+        || *RuntimeIterModN == N-1)) /* average for last N */
+    {
+        *RuntimeAvg = 0.;
+        if (*RuntimeIterModN < N-1)
+            (*RuntimeIterModN)--;
+        for (i = 0; i <= *RuntimeIterModN; i++)
+        {
+            *RuntimeAvg += RuntimeLastN[i];
+        }
+        *RuntimeAvg /= (double) ((*RuntimeIterModN)+1);
+        printf("\n\nAvarage runtime over the last %d iterations is %.2lf %s\n\n\n",
+                (*RuntimeIterModN)+1, *RuntimeAvg, time_unit_str(unit));
+        if (!(*Report))
+        {
+            *Report = fopen(fn, "w");
+            *_Report = fprintf(*Report,
+                            "Begin Timestamp\t\t%ld\n"\
+                            "Accuracy / Loop\t\t%d\n"\
+                            "Measured in\t\t%s\n\n\n"\
+                            "Index\tValue\tParams\tBreak\n",
+                            BeginTimestamp, N, time_unit_str(unit));
+            if (*_Report == EOF) fclose(*Report);
+        }
+        else if (*_Report > EOF)
+        {
+            *Report = fopen(fn, "a");
+        }
+        if (*_Report > EOF)
+        {
+            if (*RuntimeIterModN == N-1)
+            {
+                *_Report = fprintf(*Report, "%lu\t%.2lf\t%s\n", *RuntimeAvgIdx, *RuntimeAvg,
+                                    encode_params(&curr_params, true));
+            }
+            else
+            {
+                *_Report = fprintf(*Report, "%lu\t%.2lf\t%s\t%.4lf\n", *RuntimeAvgIdx, *RuntimeAvg,
+                                    encode_params(LastParams, true),
+                                    (double) ((*RuntimeIterModN)+1) / (double) N);
+                RuntimeLastN[0] = RuntimeLastN[(*RuntimeIterModN)+1];
+                *RuntimeIterModN = 0;
+            }
+            fclose(*Report);
+            (*RuntimeAvgIdx)++;
+        }
+    }
+    *RuntimeIterModN = ((*RuntimeIterModN)+1) % N;
+
+    *LastParams = curr_params;
 }
 
 /*
@@ -839,6 +920,8 @@ static tree234* LastBaseEdges = NULL;
 static int _GDReport = 0;
 static FILE* GDReport = NULL;
 
+static time_t GDBeginTimestamp = 0L;
+
 /*
  * Calculate the dissimilarity of the base graphs between two game generations
  * by comparing their points/vertices and edges and summing up the predefined
@@ -853,6 +936,9 @@ static void calc_graphdissim(tree234* curr_base_edges, point* curr_base_pts, int
     point* last_pt;
     point* curr_pt;
     edge* e;
+
+    if (GDBeginTimestamp == 0L)
+        GDBeginTimestamp = time(NULL);
 
     if (LastBaseEdges && LastBasePts && LastSubsizes && LastSuboffs
         && curr_params.mode == GDLastParams.mode && curr_params.n_base == GDLastParams.n_base)
@@ -938,11 +1024,11 @@ static void calc_graphdissim(tree234* curr_base_edges, point* curr_base_pts, int
             if (!GDReport) {
                 GDReport = fopen("graph_dissim.bench", "w");
                 _GDReport = fprintf(GDReport,
-                                    "Begin Timestamp\t\t%d\n"\
+                                    "Begin Timestamp\t\t%ld\n"\
                                     "Accuracy / Loop\t\t%lu\n"\
                                     "Measured in\t\tTransformation Cost\n\n\n"\
                                     "Index\tValue\tParams\tBreak\n",
-                                    (int) time(NULL), lenof(GraphDissimLastN));
+                                    GDBeginTimestamp, lenof(GraphDissimLastN));
                 if (_GDReport == EOF) fclose(GDReport);
             }
             else if (_GDReport > EOF)
@@ -997,69 +1083,22 @@ static game_params GGRLastParams = {};
 static int _GGRReport = 0;
 static FILE* GGRReport = NULL;
 
+static time_t GGRBeginTimestamp = 0L;
+
 /*
  * Calculate the runtime of the generation of a new game by measuring the difference
  * between the timestamps begin and end
  */
 static void calc_gamegen_runtime(clock_t begin, clock_t end, const game_params curr_params)
 {
-    int i;
-    
+    if (!GGRBeginTimestamp)
+        GGRBeginTimestamp = time(NULL);
     GameGenRuntime = calc_runtime(begin, end, MICROSECS);
     printf("Game generation runtime iteration number: %d\n", GameGenRuntimeIterModN);
-    printf("Game generation runtime is %.2lf \xc2\xb5s\n", GameGenRuntime);
-    GameGenRuntimeLastN[GameGenRuntimeIterModN] = GameGenRuntime;
-    if ((GameGenRuntimeIterModN > 0) /* not initial call */
-        && (curr_params.mode != GGRLastParams.mode || curr_params.n_base != GGRLastParams.n_base /* break average */
-        || GameGenRuntimeIterModN == lenof(GameGenRuntimeLastN)-1)) /* average for N_GAMEGENRUNTIME */
-    {
-        GameGenRuntimeAvg = 0.;
-        if (GameGenRuntimeIterModN < lenof(GameGenRuntimeLastN)-1)
-            GameGenRuntimeIterModN--;
-        for (i = 0; i <= GameGenRuntimeIterModN; i++)
-        {
-            GameGenRuntimeAvg += GameGenRuntimeLastN[i];
-        }
-        GameGenRuntimeAvg /= (double) (GameGenRuntimeIterModN+1);
-        printf("\n\nAvarage game generation runtime over the last %d game generations"\
-                " is %.2lf \xc2\xb5s\n\n\n", GameGenRuntimeIterModN+1, GameGenRuntimeAvg);
-        if (!GGRReport)
-        {
-            GGRReport = fopen("gamegen_runtime.bench", "w");
-            _GGRReport = fprintf(GGRReport,
-                                "Begin Timestamp\t\t%d\n"\
-                                "Accuracy / Loop\t\t%lu\n"\
-                                "Measured in\t\t\xc2\xb5s\n\n\n"\
-                                "Index\tValue\tParams\tBreak\n",
-                                (int) time(NULL), lenof(GameGenRuntimeLastN));
-            if (_GGRReport == EOF) fclose(GGRReport);
-        }
-        else if (_GGRReport > EOF)
-        {
-            GGRReport = fopen("gamegen_runtime.bench", "a");
-        }
-        if (_GGRReport > EOF)
-        {
-            if (GameGenRuntimeIterModN == lenof(GameGenRuntimeLastN)-1)
-            {
-                _GGRReport = fprintf(GGRReport, "%lu\t%.2lf\t%s\n", GameGenRuntimeAvgIdx, GameGenRuntimeAvg,
-                                    encode_params(&curr_params, true));
-            }
-            else
-            {
-                _GGRReport = fprintf(GGRReport, "%lu\t%.2lf\t%s\t%.2lf\n", GameGenRuntimeAvgIdx, GameGenRuntimeAvg,
-                                    encode_params(&GGRLastParams, true),
-                                    (double) (GameGenRuntimeIterModN+1) / (double) lenof(GameGenRuntimeLastN));
-                GameGenRuntimeLastN[0] = GameGenRuntimeIterModN+1;
-                GameGenRuntimeIterModN = 0;
-            }
-            fclose(GGRReport);
-            GameGenRuntimeAvgIdx++;
-        }
-    }
-    GameGenRuntimeIterModN = (GameGenRuntimeIterModN+1) % lenof(GameGenRuntimeLastN);
-
-    GGRLastParams = curr_params;
+    printf("Game generation runtime is %.2lf %s\n", GameGenRuntime, time_unit_str(MICROSECS));
+    write_runtime_report(GameGenRuntime, MICROSECS, lenof(GameGenRuntimeLastN), &GameGenRuntimeIterModN,
+                        GameGenRuntimeLastN, &GameGenRuntimeAvgIdx, &GameGenRuntimeAvg, &GGRLastParams,
+                        &_GGRReport, &GGRReport, "gamegen_runtime.bench", GGRBeginTimestamp, curr_params);
 }
 #endif
 
@@ -2189,12 +2228,95 @@ static void* mappingcpy(void* state, void* elem)
 }
 
 /*
+ * Heuristic used to search for an isomorphism between graphs
+ */
+enum heuristic {
+    NONE,
+    DEGREE
+};
+
+/*
+ * Continuation of benchmark related structures section
+ */
+#ifdef BENCHMARKS
+
+#define N_ISOTESTRUNTIME 50
+
+/* degree heuristic */
+static double FindIsoDRuntime = 0.;
+static int FindIsoDRuntimeIterModN = 0;
+static double FindIsoDRuntimeLastN[N_ISOTESTRUNTIME];
+static ulong FindIsoDRuntimeAvgIdx = 0;
+static double FindIsoDRuntimeAvg = 0.;
+
+static game_params FIDRLastParams = {};
+
+static int _FIDRReport = 0;
+static FILE* FIDRReport = NULL;
+
+static time_t FIDRBeginTimestamp = 0L;
+
+/* bruteforce */
+static double FindIsoNRuntime = 0.;
+static int FindIsoNRuntimeIterModN = 0;
+static double FindIsoNRuntimeLastN[N_ISOTESTRUNTIME];
+static ulong FindIsoNRuntimeAvgIdx = 0;
+static double FindIsoNRuntimeAvg = 0.;
+
+static game_params FINRLastParams = {};
+
+static int _FINRReport = 0;
+static FILE* FINRReport = NULL;
+
+static time_t FINRBeginTimestamp = 0L;
+
+/*
+ * Calculate the runtime of an isomorphism test by measuring the difference
+ * between the timestamps begin and end
+ */
+static void calc_isotest_runtime(clock_t begin, clock_t end, enum heuristic heur,
+                                const game_params curr_params)
+{
+    switch (heur) {
+        case NONE:
+            if (!FINRBeginTimestamp)
+                FINRBeginTimestamp = time(NULL);
+            FindIsoNRuntime = calc_runtime(begin, end, MICROSECS);
+            printf("Find isomorphism bruteforce runtime iteration number: %d\n",
+                    FindIsoNRuntimeIterModN);
+            printf("Find isomorphism bruteforce runtime is %.2lf %s\n", FindIsoNRuntime, time_unit_str(MICROSECS));
+            write_runtime_report(FindIsoNRuntime, MICROSECS, lenof(FindIsoNRuntimeLastN), &FindIsoNRuntimeIterModN,
+                                FindIsoNRuntimeLastN, &FindIsoNRuntimeAvgIdx, &FindIsoNRuntimeAvg, &FINRLastParams,
+                                &_FINRReport, &FINRReport, "isotest_bf_runtime.bench", FINRBeginTimestamp, curr_params);
+            break;
+        case DEGREE:
+            if (!FIDRBeginTimestamp)
+                FIDRBeginTimestamp = time(NULL);
+            FindIsoDRuntime = calc_runtime(begin, end, MICROSECS);
+            printf("Find isomorphism degree heuristic runtime iteration number: %d\n",
+                    FindIsoDRuntimeIterModN);
+            printf("Find isomorphism degree heuristic runtime is %.2lf %s\n", FindIsoDRuntime, time_unit_str(MICROSECS));
+            write_runtime_report(FindIsoDRuntime, MICROSECS, lenof(FindIsoDRuntimeLastN), &FindIsoDRuntimeIterModN,
+                                FindIsoDRuntimeLastN, &FindIsoDRuntimeAvgIdx, &FindIsoDRuntimeAvg, &FIDRLastParams,
+                                &_FIDRReport, &FIDRReport, "isotest_degh_runtime.bench", FIDRBeginTimestamp, curr_params);
+            break;
+        default:;
+    }
+}
+#endif
+
+/*
  * Check whether there exists an isomorphism between a test graph and a comparison
  * graph. The algorithm builds on the idea that vertices with different degree can't
  * be a vertex pair of a permutation that is an isomorphism between two graphs.
+ * Use the given heuristic `heur` to build the search tree.
  */
-static bool isomorphism_degheuristic(const graph* the_graph, const graph* cmp_graph,
-                                    tree234** solution)
+static bool find_isomorphism(const graph* the_graph, const graph* cmp_graph,
+                                    tree234** solution, enum heuristic heur
+#ifdef BENCHMARKS
+                                    , game_params params
+#endif
+                                    )
 {
     bool found;
     int i, j;
@@ -2208,10 +2330,6 @@ static bool isomorphism_degheuristic(const graph* the_graph, const graph* cmp_gr
     node* n;
     node* root;
     tree234* lifo;
-
-#ifdef BENCHMARKS
-    clock_t begin = clock();
-#endif
     
     /* Check whether the graphs have the same number of vertices */
     if (nvtcs != (tmp = count234(cmp_graph->vertices)))
@@ -2251,8 +2369,8 @@ static bool isomorphism_degheuristic(const graph* the_graph, const graph* cmp_gr
             sfree(vtcs_cmp);
             return false;
         }
-        else if (i < nvtcs - 1 && vtcs_the[i+1].deg != vtcs_the[i].deg)
-            tmp++;
+        if (heur == DEGREE && i < nvtcs - 1 && vtcs_the[i+1].deg != vtcs_the[i].deg)
+                tmp++;
     }
 
     /*
@@ -2274,38 +2392,65 @@ static bool isomorphism_degheuristic(const graph* the_graph, const graph* cmp_gr
     root->cellsizes = snewn(root->ncells, int);
     root->isleaf = true;
     LOG(("Initialized root node with %d cells\n", root->ncells));
-    for (i = 0; i < root->ncells; i++)
+    /* degree heuristic: add all vertices with equal degree to the same cell */
+    if (heur == DEGREE)
     {
-        root->cellsizes[i] = 1;
-    }
-    tmp = 0;
-    for (i = 1; i < nvtcs; i++)
-    {
-        if (vtcs_the[i].deg == vtcs_the[i-1].deg)
-            root->cellsizes[tmp]++;
-        else
-            tmp++;
-    }
-#if DEBUGGING
-    assert(tmp == root->ncells - 1);
-#endif
-    tmp = 0;
-    for (i = 0; i < root->ncells; i++)
-    {
-        root->cells[i] = snewn(root->cellsizes[i], vertex);
-        for (j = 0; j < root->cellsizes[i]; j++)
+        for (i = 0; i < root->ncells; i++)
         {
-            vx = root->cells[i] + j;
-            *vx = vtcs_cmp[tmp+j];
-            LOG(("Added vertex %d with index %d and degree %d to root cell %d at"\
-                " position %d\n", tmp + j, vtcs_cmp[tmp+j].idx, vtcs_cmp[tmp+j].deg,
-                i, j));
+            root->cellsizes[i] = 1;
         }
-        tmp += root->cellsizes[i];
+        tmp = 0;
+        for (i = 1; i < nvtcs; i++)
+        {
+            if (vtcs_the[i].deg == vtcs_the[i-1].deg)
+                root->cellsizes[tmp]++;
+            else
+                tmp++;
+        }
+#if DEBUGGING
+        assert(tmp == root->ncells - 1);
+#endif
+        tmp = 0;
+        for (i = 0; i < root->ncells; i++)
+        {
+            root->cells[i] = snewn(root->cellsizes[i], vertex);
+            for (j = 0; j < root->cellsizes[i]; j++)
+            {
+                vx = root->cells[i] + j;
+                *vx = vtcs_cmp[tmp+j];
+                LOG(("Added vertex %d with index %d and degree %d to root cell %d at"\
+                    " position %d\n", tmp + j, vtcs_cmp[tmp+j].idx, vtcs_cmp[tmp+j].deg,
+                    i, j));
+            }
+            tmp += root->cellsizes[i];
+        }
+    }
+    /* bruteforce: add all vertices to a single cell */
+    else
+    {
+        *root->cellsizes = nvtcs;
+        *root->cells = snewn(*root->cellsizes, vertex);
+        for (j = 0; j < *root->cellsizes; j++)
+        {
+            vx = (*root->cells) + j;
+            *vx = vtcs_cmp[j];
+            LOG(("Added vertex %d with index %d and degree %d to root cell 0 at"\
+                " position %d\n", j, vtcs_cmp[j].idx, vtcs_cmp[j].deg, j));
+        }
     }
     sfree(vtcs_cmp);
     tmp = 0;
     lifo = newtree234(NULL);
+
+/*
+ * Since we start measuring from here, we purposely ignore the time that it takes to build
+ * the search tree. Obviously for very small graphs building the bruteforce search tree is
+ * faster.
+ */
+#ifdef BENCHMARKS
+    clock_t begin = clock();
+#endif
+
     addpos234(lifo, root, tmp++);
     LOG(("Initialized lifo queue with root node\nStarting depth first search for"\
         " an isomorphism between the graphs\n"));
@@ -2355,6 +2500,10 @@ static bool isomorphism_degheuristic(const graph* the_graph, const graph* cmp_gr
             }
             if (found)
             {
+#ifdef BENCHMARKS
+                clock_t end = clock();
+                calc_isotest_runtime(begin, end, heur, params);
+#endif
                 if (solution) *solution = copytree234(map, mappingcpy, NULL);
                 LOG(("Permutation is an isomorphism between the graphs\n"));
                 sfree(mappings);
@@ -2373,175 +2522,12 @@ static bool isomorphism_degheuristic(const graph* the_graph, const graph* cmp_gr
         }
     }
 
-#ifdef BENCHMARKS
-    clock_t end = clock();
-    double duration = ((double) (end - begin) * 1000.0) / CLOCKS_PER_SEC;
-    printf("Finished isomorphism test with degree heuristic, duration: %lf\n",
-        duration);
-#endif
-
     sfree(vtcs_the);
     free_node(root, true);
     freetree234(lifo);
 
     return found;
 }
-
-#ifdef BENCHMARKS
-/*
- * Check whether there exists an isomorphism between a test graph and a comparison
- * graph. The algorithm is a simple bruteforce algorithm that checks for all possible
- * permutations whether it is an isomorphism between the graphs.
- */
-static bool isomorphism_bruteforce(const graph* the_graph, const graph* cmp_graph)
-{
-    bool found;
-    int i, j;
-    int tmp;
-    int nvtcs = count234(the_graph->vertices);
-    vertex* vx;
-    vertex* vtcs_the;
-    vertex* vtcs_cmp;
-    vertex* permu;
-    edge* e;
-    node* n;
-    node* root;
-    tree234* lifo;
-
-    clock_t begin = clock();
-    
-    /* Check whether the graphs have the same number of vertices */
-    if (nvtcs != (tmp = count234(cmp_graph->vertices)))
-    {
-        LOG(("The graphs have different amounts of vertices (%d and %d)\n",
-            nvtcs, tmp));
-        return false;
-    }
-
-    /* Check whether the graphs have identical vertex degree distributions */
-    vtcs_the = snewn(nvtcs, vertex);
-    for (i = 0; (vx = index234(the_graph->vertices, i)) != NULL; i++)
-    {
-        vtcs_the[i] = *vx;
-#if DEBUGGING
-        if (i > 0) assert(vtcs_the[i-1].deg <= vtcs_the[i].deg);
-#endif
-    }
-    vtcs_cmp = snewn(nvtcs, vertex);
-    for (i = 0; (vx = index234(cmp_graph->vertices, i)) != NULL; i++)
-    {
-        vtcs_cmp[i] = *vx;
-#if DEBUGGING
-        if (i > 0) assert(vtcs_cmp[i-1].deg <= vtcs_cmp[i].deg);
-#endif
-    }
-
-    for (i = 0; i < nvtcs; i++)
-    {
-        LOG(("Vertices at position %d have indices %d and %d and degrees %d and %d\n",
-            i, vtcs_the[i].idx, vtcs_cmp[i].idx, vtcs_the[i].deg, vtcs_cmp[i].deg));
-        if (vtcs_the[i].deg != vtcs_cmp[i].deg)
-        {
-            LOG(("The graphs have different vertex degree distributions\n"));
-            sfree(vtcs_the);
-            sfree(vtcs_cmp);
-            return false;
-        }
-    }
-
-    root = snew(node);
-    root->ncells = 1;
-    root->cells = snewn(root->ncells, vertex*);
-    root->cellsizes = snewn(root->ncells, int);
-    root->isleaf = true;
-    LOG(("Initialized root node with %d cells\n", root->ncells));
-    *root->cellsizes = nvtcs;
-    *root->cells = snewn(*root->cellsizes, vertex);
-    for (j = 0; j < *root->cellsizes; j++)
-    {
-        vx = (*root->cells) + j;
-        *vx = vtcs_cmp[j];
-        LOG(("Added vertex %d with index %d and degree %d to root cell 0 at"\
-            " position %d\n", j, vtcs_cmp[j].idx, vtcs_cmp[j].deg, j));
-    }
-    sfree(vtcs_cmp);
-    tmp = 0;
-    lifo = newtree234(NULL);
-    addpos234(lifo, root, tmp++);
-    LOG(("Initialized lifo queue with root node\nStarting depth first search for"\
-        " an isomorphism between the graphs\n"));
-    while (tmp)
-    {
-        n = delpos234(lifo, --tmp);
-        LOG(("Fetched node at position %d from the lifo queue\n", tmp));
-        if((permu = expand_node(n)))
-        {
-            mapping* mappings;
-            tree234* map = newtree234(mappingcmp);
-            found = true;
-            LOG(("Found vertex permuation that could be an ismomorphism"\
-                " between the graphs\n"));
-            /*
-             * We don't need to check whether the test graph has additional edges that
-             * are missing in the comparison graph since we already compared the vertex
-             * degree distibutions of both graphs. Thus the sum of all vertex degrees
-             * must be equal for both graphs and the number of edges respectively.
-             */
-            mappings = snewn(nvtcs, mapping);
-            for (j = 0; j < nvtcs; j++)
-            {
-                mappings[j].key = permu[j].idx;
-                mappings[j].value = vtcs_the[j].idx;
-                add234(map, mappings + j);
-            }
-            sfree(permu);
-            for (j = 0; (e = index234(cmp_graph->edges, j)) != NULL; j++)
-            {
-                mapping msrc, mtgt;
-                msrc.key = e->src;
-                mtgt.key = e->tgt;
-                msrc.value = mtgt.value = -1;
-                msrc.value = ((mapping*) find234(map, &msrc, NULL))->value;
-                mtgt.value = ((mapping*) find234(map, &mtgt, NULL))->value;
-                if (!isedge(the_graph->edges, msrc.value, mtgt.value))
-                {
-                    found = false;
-                    LOG(("Permutation is no isomorphism between the graphs,\n"\
-                        " missing edge %d-%d in the test graph\n", msrc.value,
-                        mtgt.value));
-                    break;
-                }
-            }
-            sfree(mappings);
-            freetree234(map);
-            if (found)
-            {
-                LOG(("Permutation is an isomorphism between the graphs\n"));
-                break;
-            }
-        }
-        else
-        {
-            for (i = n->nchildren - 1; i >= 0; i--)
-            {
-                addpos234(lifo, n->children + i, tmp++);
-                LOG(("Added child node %d at position %d to lifo queue\n", i,
-                    tmp - 1));
-            }
-        }
-    }
-
-    clock_t end = clock();
-    double duration = ((double) (end - begin) * 1000.0) / CLOCKS_PER_SEC;
-    printf("Finished bruteforce isomorphism test, duration: %lf\n", duration);
-
-    sfree(vtcs_the);
-    free_node(root, true);
-    freetree234(lifo);
-
-    return found;
-}
-#endif
 
 /*
  * A move that can be performed by a player
@@ -2634,18 +2620,30 @@ static char* solve_bruteforce(const game_state* currstate, game_state** solvedst
             }
         }
     }
-    else if (isomorphism_degheuristic(currstate->minor, currstate->base, solution))
+    else if (find_isomorphism(currstate->minor, currstate->base, solution, DEGREE
+#ifdef BENCHMARKS
+                            , currstate->params
+#endif
+                            ))
     {
         char* moves = snewn(*movessize, char);
         LOG(("Bruteforce solver - Found solution\n"));
 #ifdef BENCHMARKS
-        assert(isomorphism_bruteforce(currstate->minor, currstate->base));
+        assert(find_isomorphism(currstate->minor, currstate->base, NULL, NONE,
+                                currstate->params));
 #endif
         *moves = 'S';
         *moveslen = 1;
         *solvedstate = dup_game(currstate);
         return moves;
     }
+#ifdef BENCHMARKS
+    else
+    {
+        assert(!find_isomorphism(currstate->minor, currstate->base, NULL, NONE,
+                                currstate->params));
+    }
+#endif
     
     return NULL;
 }
@@ -2811,11 +2809,17 @@ static char *solve_game(const game_state *state, const game_state *currstate,
      * always find it.
      */
     solution = NULL;
-    if (!(solved->solved = isomorphism_degheuristic(solved->minor, solved->base, &solution)))
-    {
+    solved->solved = find_isomorphism(solved->minor, solved->base, &solution, DEGREE
 #ifdef BENCHMARKS
-        assert(!isomorphism_bruteforce(solved->minor, solved->base));
+                                    , currstate->params
 #endif
+                                    );
+#ifdef BENCHMARKS
+    assert(solved->solved == find_isomorphism(solved->minor, solved->base, NULL, NONE,
+                                            currstate->params));
+#endif
+    if (!solved->solved)
+    {
         sfree(ret);
         free_game(solved);
         try_solve_bruteforce:
@@ -3387,9 +3391,14 @@ static game_state *execute_move(const game_state *state, const char *move)
 
         if (!(current_move == MOVE_DRAGPOINT || state->solved || ret->solved))
         {
-            ret->solved = isomorphism_degheuristic(ret->minor, ret->base, NULL);
+            ret->solved = find_isomorphism(ret->minor, ret->base, NULL, DEGREE
 #ifdef BENCHMARKS
-            assert(ret->solved == isomorphism_bruteforce(ret->minor, ret->base));
+                                        , ret->params
+#endif
+                                        );
+#ifdef BENCHMARKS
+            assert(ret->solved == find_isomorphism(ret->minor, ret->base, NULL, NONE,
+                                                ret->params));
 #endif
         }
     }
