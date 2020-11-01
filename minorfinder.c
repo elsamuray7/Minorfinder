@@ -816,7 +816,6 @@ static const char* time_unit_str(enum time_unit unit)
         case SECS: return "s";
         case MILLISECS: return "ms";
         case MICROSECS: return "\xc2\xb5s";
-        case NANOSECS: return "ns";
         default: return NULL;
     }
 }
@@ -1573,9 +1572,7 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     freetree234(edges_base_234);
 #else
     calc_graphdissim(edges_base_234, pts_base, subsizes, suboffs, *params);
-
-    clock_t end = clock();
-    calc_gamegen_runtime(begin, end, *params);
+    calc_gamegen_runtime(begin, clock(), *params);
 #endif
     freetree234(tmp_234);
 
@@ -2240,7 +2237,7 @@ enum heuristic {
  */
 #ifdef BENCHMARKS
 
-#define N_ISOTESTRUNTIME 50
+#define N_ISOTESTRUNTIME 100
 
 /* degree heuristic */
 static double FindIsoDRuntime = 0.;
@@ -2444,8 +2441,8 @@ static bool find_isomorphism(const graph* the_graph, const graph* cmp_graph,
 
 /*
  * Since we start measuring from here, we purposely ignore the time that it takes to build
- * the search tree. Obviously for very small graphs building the bruteforce search tree is
- * faster.
+ * the search tree. Obviously, for very small graphs, building the bruteforce search tree
+ * is faster.
  */
 #ifdef BENCHMARKS
     clock_t begin = clock();
@@ -2501,8 +2498,7 @@ static bool find_isomorphism(const graph* the_graph, const graph* cmp_graph,
             if (found)
             {
 #ifdef BENCHMARKS
-                clock_t end = clock();
-                calc_isotest_runtime(begin, end, heur, params);
+                calc_isotest_runtime(begin, clock(), heur, params);
 #endif
                 if (solution) *solution = copytree234(map, mappingcpy, NULL);
                 LOG(("Permutation is an isomorphism between the graphs\n"));
@@ -2541,6 +2537,47 @@ enum move {
 };
 
 /*
+ * Continuation of benchmark related structures section
+ */
+#ifdef BENCHMARKS
+
+#define N_SOLVERRUNTIME 1
+
+static double SolverRuntime = 0.;
+static ulong SolverIter = 0;
+
+static int _SRReport = 0;
+static FILE* SRReport = NULL;
+
+static void calc_solver_runtime(clock_t begin, clock_t end, const game_params curr_params)
+{
+    SolverRuntime = calc_runtime(begin, end, MILLISECS);
+    printf("Solver bruteforce runtime is %.2lf %s\n", SolverRuntime, time_unit_str(MILLISECS));
+    if (!SRReport)
+    {
+        SRReport = fopen("solver_bf_runtime.bench", "w");
+        _SRReport = fprintf(SRReport,
+                        "Begin Timestamp\t\t%ld\n"\
+                        "Measured in\t\t%s\n\n\n"\
+                        "Index\t\tValue\t\tParams\n",
+                        time(NULL), time_unit_str(MILLISECS));
+        if (_SRReport == EOF) fclose(SRReport);
+    }
+    else if (_SRReport > EOF)
+    {
+        SRReport = fopen("solver_bf_runtime.bench", "a");
+    }
+    if (_SRReport > EOF)
+    {
+        _SRReport = fprintf(SRReport, "%lu\t\t%lf\t%s\n", SolverIter, SolverRuntime,
+                            encode_params(&curr_params, true));
+        fclose(SRReport);
+        SolverIter++;
+    }
+}
+#endif
+
+/*
  * Start from currstate and recursively check for all possible contraction sequences whether
  * they lead to a solved state or not. If yes the method should return a non-NULL pointer to
  * a dynamic string, otherwise it should return NULL. If the algorithm runs longer than time-
@@ -2553,8 +2590,17 @@ static char* solve_bruteforce(const game_state* currstate, game_state** solvedst
     enum move mvs[] = { MOVE_CONTREDGE, MOVE_DELEDGE };
     edge* e;
 
+#ifndef BENCHMARKS
     if (((double) (clock() - begin) * 1000.0) / CLOCKS_PER_SEC > timeout)
         return NULL;
+#else
+    clock_t now = clock();
+    if (((double) (now - begin) / CLOCKS_PER_SEC > 30.0 * 60.0))
+    {
+        calc_solver_runtime(begin, now, currstate->params);
+        return NULL;
+    }
+#endif
 
     if (count234(currstate->base->vertices) > currstate->params.n_min)
     {
@@ -2629,6 +2675,7 @@ static char* solve_bruteforce(const game_state* currstate, game_state** solvedst
         char* moves = snewn(*movessize, char);
         LOG(("Bruteforce solver - Found solution\n"));
 #ifdef BENCHMARKS
+        calc_solver_runtime(begin, clock(), currstate->params);
         assert(find_isomorphism(currstate->minor, currstate->base, NULL, NONE,
                                 currstate->params));
 #endif
@@ -2827,8 +2874,7 @@ static char *solve_game(const game_state *state, const game_state *currstate,
         solved = NULL;
         retsize = 256;
         retlen = 0;
-        clock_t begin = clock();
-        if (!(ret = solve_bruteforce(currstate, &solved, &solution, &retsize, &retlen, begin, 100)))
+        if (!(ret = solve_bruteforce(currstate, &solved, &solution, &retsize, &retlen, clock(), 100)))
         {
             sfree(solved);
             *error = "Solution not known for the current puzzle state";
