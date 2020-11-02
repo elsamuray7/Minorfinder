@@ -1069,7 +1069,7 @@ static void calc_graphdissim(tree234* curr_base_edges, point* curr_base_pts, int
     LastBaseEdges = curr_base_edges;
 }
 
-#define N_GAMEGENRUNTIME 500
+#define N_GAMEGENRUNTIME 100
 
 static double GameGenRuntime = 0.;
 static int GameGenRuntimeIterModN = 0;
@@ -1411,6 +1411,11 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     LOG(("\n"));
 #endif
 
+#ifdef BENCHMARKS
+    calc_gamegen_runtime(begin, clock(), *params);
+    calc_graphdissim(edges_base_234, pts_base, subsizes, suboffs, *params);
+#endif
+
     /*
      * The generation of a new game description is finished. Now we need to encode
      * the description in a dynamically allocated string and connect this string to
@@ -1570,9 +1575,6 @@ static char *new_game_desc(const game_params *params, random_state *rs,
     sfree(pts_base);
     while ((e = delpos234(edges_base_234, 0)) != NULL) sfree(e);
     freetree234(edges_base_234);
-#else
-    calc_graphdissim(edges_base_234, pts_base, subsizes, suboffs, *params);
-    calc_gamegen_runtime(begin, clock(), *params);
 #endif
     freetree234(tmp_234);
 
@@ -2237,7 +2239,7 @@ enum heuristic {
  */
 #ifdef BENCHMARKS
 
-#define N_ISOTESTRUNTIME 100
+#define N_ISOTESTRUNTIME 5
 
 /* degree heuristic */
 static double FindIsoDRuntime = 0.;
@@ -2541,8 +2543,6 @@ enum move {
  */
 #ifdef BENCHMARKS
 
-#define N_SOLVERRUNTIME 1
-
 static double SolverRuntime = 0.;
 static ulong SolverIter = 0;
 
@@ -2594,12 +2594,8 @@ static char* solve_bruteforce(const game_state* currstate, game_state** solvedst
     if (((double) (clock() - begin) * 1000.0) / CLOCKS_PER_SEC > timeout)
         return NULL;
 #else
-    clock_t now = clock();
-    if (((double) (now - begin) / CLOCKS_PER_SEC > 30.0 * 60.0))
-    {
-        calc_solver_runtime(begin, now, currstate->params);
+    if (((double) (clock() - begin) / CLOCKS_PER_SEC > 10.0 * 60.0)) /* 10 minutes */
         return NULL;
-    }
 #endif
 
     if (count234(currstate->base->vertices) > currstate->params.n_min)
@@ -2874,7 +2870,7 @@ static char *solve_game(const game_state *state, const game_state *currstate,
         solved = NULL;
         retsize = 256;
         retlen = 0;
-        if (!(ret = solve_bruteforce(currstate, &solved, &solution, &retsize, &retlen, clock(), 100)))
+        if (!(ret = solve_bruteforce(currstate, &solved, &solution, &retsize, &retlen, clock(), 3000)))
         {
             sfree(solved);
             *error = "Solution not known for the current puzzle state";
