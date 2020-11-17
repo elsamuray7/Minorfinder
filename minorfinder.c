@@ -907,7 +907,7 @@ enum cost {
 static int GraphDissim = -1;
 static int GraphDissimIterModN = 0;
 static int GraphDissimLastN[N_GRAPHDISSIM];
-static ulong GraphDissimAvgIdx = 0;
+static ulong GraphDissimAvgIdx = 0UL;
 static int GraphDissimAvg = 0;
 
 static game_params GDLastParams = {};
@@ -1074,7 +1074,7 @@ static void calc_graphdissim(tree234* curr_base_edges, point* curr_base_pts, int
 static double GameGenRuntime = 0.;
 static int GameGenRuntimeIterModN = 0;
 static double GameGenRuntimeLastN[N_GAMEGENRUNTIME];
-static ulong GameGenRuntimeAvgIdx = 0;
+static ulong GameGenRuntimeAvgIdx = 0UL;
 static double GameGenRuntimeAvg = 0.;
 
 static game_params GGRLastParams = {};
@@ -2239,13 +2239,15 @@ enum heuristic {
  */
 #ifdef BENCHMARKS
 
-#define N_ISOTESTRUNTIME 5
+#define N_ISOTEST 100
 
 /* degree heuristic */
+
+/* runtime */
 static double FindIsoDRuntime = 0.;
 static int FindIsoDRuntimeIterModN = 0;
-static double FindIsoDRuntimeLastN[N_ISOTESTRUNTIME];
-static ulong FindIsoDRuntimeAvgIdx = 0;
+static double FindIsoDRuntimeLastN[N_ISOTEST];
+static ulong FindIsoDRuntimeAvgIdx = 0UL;
 static double FindIsoDRuntimeAvg = 0.;
 
 static game_params FIDRLastParams = {};
@@ -2255,11 +2257,28 @@ static FILE* FIDRReport = NULL;
 
 static time_t FIDRBeginTimestamp = 0L;
 
+/* number of explored nodes/permus */
+static int FindIsoDNumIterModN = 0;
+static int FindIsoDNumNodesLastN[N_ISOTEST];
+static int FindIsoDNumPermusLastN[N_ISOTEST];
+static ulong FindIsoDNumAvgIdx = 0UL;
+static double FindIsoDNumNodesAvg = 0.;
+static double FindIsoDNumPermusAvg = 0.;
+
+static game_params FIDNumLastParams = {};
+
+static int _FIDNumReport = 0;
+static FILE* FIDNumReport = NULL;
+
+static time_t FIDNumBeginTimestamp = 0L;
+
 /* bruteforce */
+
+/* runtime */
 static double FindIsoNRuntime = 0.;
 static int FindIsoNRuntimeIterModN = 0;
-static double FindIsoNRuntimeLastN[N_ISOTESTRUNTIME];
-static ulong FindIsoNRuntimeAvgIdx = 0;
+static double FindIsoNRuntimeLastN[N_ISOTEST];
+static ulong FindIsoNRuntimeAvgIdx = 0UL;
 static double FindIsoNRuntimeAvg = 0.;
 
 static game_params FINRLastParams = {};
@@ -2268,6 +2287,21 @@ static int _FINRReport = 0;
 static FILE* FINRReport = NULL;
 
 static time_t FINRBeginTimestamp = 0L;
+
+/* number of explored nodes/permus */
+static int FindIsoNNumIterModN = 0;
+static int FindIsoNNumNodesLastN[N_ISOTEST];
+static int FindIsoNNumPermusLastN[N_ISOTEST];
+static ulong FindIsoNNumAvgIdx = 0UL;
+static double FindIsoNNumNodesAvg = 0.;
+static double FindIsoNNumPermusAvg = 0.;
+
+static game_params FINNumLastParams = {};
+
+static int _FINNumReport = 0;
+static FILE* FINNumReport = NULL;
+
+static time_t FINNumBeginTimestamp = 0L;
 
 /*
  * Calculate the runtime of an isomorphism test by measuring the difference
@@ -2298,6 +2332,107 @@ static void calc_isotest_runtime(clock_t begin, clock_t end, enum heuristic heur
             write_runtime_report(FindIsoDRuntime, MICROSECS, lenof(FindIsoDRuntimeLastN), &FindIsoDRuntimeIterModN,
                                 FindIsoDRuntimeLastN, &FindIsoDRuntimeAvgIdx, &FindIsoDRuntimeAvg, &FIDRLastParams,
                                 &_FIDRReport, &FIDRReport, "isotest_degh_runtime.bench", FIDRBeginTimestamp, curr_params);
+            break;
+        default:;
+    }
+}
+
+static void write_num_report(int N, int* NumIterModN, int NumNodesLastN[], int NumPermusLastN[], ulong* NumAvgIdx,
+                            double* NumNodesAvg, double* NumPermusAvg, game_params* LastParams, int* _Report, FILE** Report,
+                            const char* fn, time_t BeginTimestamp, game_params curr_params)
+{
+    int i;
+
+    if ((*NumIterModN > 0) /* not initial call */
+        && (curr_params.mode != LastParams->mode || curr_params.n_base != LastParams->n_base /* break average */
+        || *NumIterModN == N-1)) /* average for last N */
+    {
+        *NumNodesAvg = 0;
+        *NumPermusAvg = 0;
+        if (*NumIterModN < N-1)
+            (*NumIterModN)--;
+        for (i = 0; i <= *NumIterModN; i++)
+        {
+            *NumNodesAvg += NumNodesLastN[i];
+            *NumPermusAvg += NumPermusLastN[i];
+        }
+        *NumNodesAvg /= (double) ((*NumIterModN)+1);
+        *NumPermusAvg /= (double) ((*NumIterModN)+1);
+        printf("\n\nAvarage num nodes over the last %d iterations is %.2lf\n\n\n",
+                (*NumIterModN)+1, *NumNodesAvg);
+        printf("\n\nAvarage num permus over the last %d iterations is %.2lf\n\n\n",
+                (*NumIterModN)+1, *NumPermusAvg);
+        if (!(*Report))
+        {
+            *Report = fopen(fn, "w");
+            *_Report = fprintf(*Report,
+                            "Begin Timestamp\t\t%ld\n"\
+                            "Accuracy / Loop\t\t%d\n"\
+                            "Measured in\t\tNumber of explored nodes(1) / permus(2)\n\n\n"\
+                            "Index\tValue1\tValue2\tParams\tBreak\n",
+                            BeginTimestamp, N);
+            if (*_Report == EOF) fclose(*Report);
+        }
+        else if (*_Report > EOF)
+        {
+            *Report = fopen(fn, "a");
+        }
+        if (*_Report > EOF)
+        {
+            if (*NumIterModN == N-1)
+            {
+                *_Report = fprintf(*Report, "%lu\t%.2lf\t%.2lf\t%s\n", *NumAvgIdx, *NumNodesAvg,
+                                    *NumPermusAvg, encode_params(&curr_params, true));
+            }
+            else
+            {
+                *_Report = fprintf(*Report, "%lu\t%.2lf\t%.2lf\t%s\t%.4lf\n", *NumAvgIdx, *NumNodesAvg,
+                                    *NumPermusAvg, encode_params(LastParams, true),
+                                    (double) ((*NumIterModN)+1) / (double) N);
+                NumNodesLastN[0] = NumNodesLastN[(*NumIterModN)+1];
+                NumPermusLastN[0] = NumPermusLastN[(*NumIterModN)+1];
+                *NumIterModN = 0;
+            }
+            fclose(*Report);
+            (*NumAvgIdx)++;
+        }
+    }
+    *NumIterModN = ((*NumIterModN)+1) % N;
+
+    *LastParams = curr_params;
+}
+
+static void calc_isotest_num(int nnodes, int npermus, enum heuristic heur,
+                            const game_params curr_params)
+{
+    switch (heur) {
+        case NONE:
+            if (!FINNumBeginTimestamp)
+                FINNumBeginTimestamp = time(NULL);
+            FindIsoNNumNodesLastN[FindIsoNNumIterModN] = nnodes;
+            FindIsoNNumPermusLastN[FindIsoNNumIterModN] = npermus;
+            printf("Find isomorphism bruteforce num iteration number: %d\n",
+                    FindIsoNRuntimeIterModN);
+            printf("Find isomorphism bruteforce num nodes is %d\n", nnodes);
+            printf("Find isomorphism bruteforce num permus is %d\n", npermus);
+            write_num_report(N_ISOTEST, &FindIsoNNumIterModN, FindIsoNNumNodesLastN, FindIsoNNumPermusLastN,
+                            &FindIsoNNumAvgIdx, &FindIsoNNumNodesAvg, &FindIsoNNumPermusAvg, &FINNumLastParams,
+                            &_FINNumReport, &FINNumReport, "isotest_bf_num.bench", FINNumBeginTimestamp,
+                            curr_params);
+            break;
+        case DEGREE:
+            if (!FIDNumBeginTimestamp)
+                FIDNumBeginTimestamp = time(NULL);
+            FindIsoDNumNodesLastN[FindIsoDNumIterModN] = nnodes;
+            FindIsoDNumPermusLastN[FindIsoDNumIterModN] = npermus;
+            printf("Find isomorphism degree heuristic num iteration number: %d\n",
+                    FindIsoNRuntimeIterModN);
+            printf("Find isomorphism degree heuristic num nodes is %d\n", nnodes);
+            printf("Find isomorphism degree heuristic num permus is %d\n", npermus);
+            write_num_report(N_ISOTEST, &FindIsoDNumIterModN, FindIsoDNumNodesLastN, FindIsoDNumPermusLastN,
+                            &FindIsoDNumAvgIdx, &FindIsoDNumNodesAvg, &FindIsoDNumPermusAvg, &FIDNumLastParams,
+                            &_FIDNumReport, &FIDNumReport, "isotest_degh_num.bench", FIDNumBeginTimestamp,
+                            curr_params);
             break;
         default:;
     }
@@ -2447,6 +2582,8 @@ static bool find_isomorphism(const graph* the_graph, const graph* cmp_graph,
  * is faster.
  */
 #ifdef BENCHMARKS
+    int nnodes = 0;
+    int npermus = 0;
     clock_t begin = clock();
 #endif
 
@@ -2456,11 +2593,13 @@ static bool find_isomorphism(const graph* the_graph, const graph* cmp_graph,
     while (tmp)
     {
         n = delpos234(lifo, --tmp);
+        nnodes++;
         LOG(("Fetched node at position %d from the lifo queue\n", tmp));
         if((permu = expand_node(n)))
         {
             mapping* mappings;
             tree234* map = newtree234(mappingcmp);
+            npermus++;
             found = true;
             LOG(("Found vertex permuation that could be an ismomorphism"\
                 " between the graphs\n"));
@@ -2501,6 +2640,7 @@ static bool find_isomorphism(const graph* the_graph, const graph* cmp_graph,
             {
 #ifdef BENCHMARKS
                 calc_isotest_runtime(begin, clock(), heur, params);
+                calc_isotest_num(nnodes, npermus, heur, params);
 #endif
                 if (solution) *solution = copytree234(map, mappingcpy, NULL);
                 LOG(("Permutation is an isomorphism between the graphs\n"));
@@ -2544,7 +2684,7 @@ enum move {
 #ifdef BENCHMARKS
 
 static double SolverRuntime = 0.;
-static ulong SolverIter = 0;
+static ulong SolverIter = 0UL;
 
 static int _SRReport = 0;
 static FILE* SRReport = NULL;
