@@ -2782,7 +2782,9 @@ static char* solve_bruteforce(const game_state* currstate, game_state** solvedst
                                 int* movessize, int* moveslen, clock_t begin, int timeout)
 {
     int i, j;
+#ifdef MINIMUM_DEGREE_HEURISTIC
     int _mindeg = minimum_degree(currstate->minor->vertices);
+#endif
     enum move mvs[] = { MOVE_CONTREDGE, MOVE_DELEDGE };
     edge* e;
 
