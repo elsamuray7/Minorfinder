@@ -2419,7 +2419,7 @@ static void calc_isotest_num(int nnodes, int npermus, enum heuristic heur,
             FindIsoNNumNodesLastN[FindIsoNNumIterModN] = nnodes;
             FindIsoNNumPermusLastN[FindIsoNNumIterModN] = npermus;
             printf("Find isomorphism bruteforce num iteration number: %d\n",
-                    FindIsoNRuntimeIterModN);
+                    FindIsoNNumIterModN);
             printf("Find isomorphism bruteforce num nodes is %d\n", nnodes);
             printf("Find isomorphism bruteforce num permus is %d\n", npermus);
             write_num_report(N_ISOTEST, &FindIsoNNumIterModN, FindIsoNNumNodesLastN, FindIsoNNumPermusLastN,
@@ -2433,7 +2433,7 @@ static void calc_isotest_num(int nnodes, int npermus, enum heuristic heur,
             FindIsoDNumNodesLastN[FindIsoDNumIterModN] = nnodes;
             FindIsoDNumPermusLastN[FindIsoDNumIterModN] = npermus;
             printf("Find isomorphism degree heuristic num iteration number: %d\n",
-                    FindIsoNRuntimeIterModN);
+                    FindIsoDNumIterModN);
             printf("Find isomorphism degree heuristic num nodes is %d\n", nnodes);
             printf("Find isomorphism degree heuristic num permus is %d\n", npermus);
             write_num_report(N_ISOTEST, &FindIsoDNumIterModN, FindIsoDNumNodesLastN, FindIsoDNumPermusLastN,
