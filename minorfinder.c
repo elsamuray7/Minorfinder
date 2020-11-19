@@ -2728,6 +2728,50 @@ static void calc_solver_runtime(clock_t begin, clock_t end, const game_params cu
 }
 #endif
 
+#ifdef SHARED_ADJACENCY_HEURISTIC
+/*
+ * Get the number of shared adjacencies of the given vertices
+ */
+static int shared_adjacency_count(int vxa, int vxb, tree234* edges)
+{
+    int i;
+    int ret = 0;
+    edge* e;
+
+    for (i = 0; (e = index234(edges, i)) != NULL; i++)
+    {
+        if ((e->src == vxa && e->tgt != vxb
+                && isedge(edges, vxb, e->tgt))
+            || (e->tgt == vxa && e->src != vxb
+                && isedge(edges, e->src, vxb)))
+            ret++;
+    }
+
+    return ret;
+}
+#endif
+
+#define MINIMUM_DEGREE_HEURISTIC
+
+#ifdef MINIMUM_DEGREE_HEURISTIC
+/*
+ * Get the minimum degree out of all vertices of the given graph
+ */
+static int minimum_degree(tree234* vertices)
+{
+    int i;
+    int ret = count234(vertices) - 1;
+    vertex* vx;
+
+    for (i = 0; (vx = index234(vertices, i)) != NULL; i++)
+    {
+        ret = min(ret, vx->deg);
+    }
+
+    return ret;
+}
+#endif
+
 /*
  * Start from currstate and recursively check for all possible contraction sequences whether
  * they lead to a solved state or not. If yes the method should return a non-NULL pointer to
@@ -2738,33 +2782,61 @@ static char* solve_bruteforce(const game_state* currstate, game_state** solvedst
                                 int* movessize, int* moveslen, clock_t begin, int timeout)
 {
     int i, j;
+    int _mindeg = minimum_degree(currstate->minor->vertices);
     enum move mvs[] = { MOVE_CONTREDGE, MOVE_DELEDGE };
     edge* e;
 
 #ifndef BENCHMARKS
     if (((double) (clock() - begin) * 1000.0) / CLOCKS_PER_SEC > timeout)
-        return NULL;
 #else
     if (((double) (clock() - begin) / CLOCKS_PER_SEC > 10.0 * 60.0)) /* 10 minutes */
-        return NULL;
 #endif
-
-    if (count234(currstate->base->vertices) > currstate->params.n_min)
     {
-        LOG(("Bruteforce solver - Base graph has more vertices than minor graph left\n"));
+        return NULL;
+    }
+    else if (count234(currstate->base->edges) > count234(currstate->minor->edges))
+    {
+        LOG(("Bruteforce solver - Base graph has more vertices and edges than minor"\
+            "graph left\n"));
         for (i = 0; (e = index234(currstate->base->edges, i)) != NULL; i++)
         {
             for (j = 0; j < lenof(mvs); j++)
             {
                 char* moves;
-                game_state* nextstate = dup_game(currstate);
+                game_state* nextstate = NULL;
                 switch (mvs[j])
                 {
                     case MOVE_CONTREDGE:
+#ifdef SHARED_ADJACENCY_HEURISTIC
+                        if (currstate->base->vtcs[e->src].deg + currstate->base->vtcs[e->tgt].deg
+                            - shared_adjacency_count(e->src, e->tgt, currstate->base->edges) - 2 < _mindeg)
+                        {
+                            LOG(("Bruteforce solver - Discarded contraction of edge %d-%d\n",
+                                e->src, e->tgt));
+                            continue;
+                        }
+#endif
+                        if (count234(currstate->base->vertices) <= currstate->params.n_min)
+                        {
+                            LOG(("Bruteforce solver - Discarded contraction of edge %d-%d\n",
+                                e->src, e->tgt));
+                            continue;
+                        }
+                        nextstate = dup_game(currstate);
                         contract_edge(nextstate->base, e->src, e->tgt);
                         LOG(("Bruteforce solver - Contracted edge %d-%d\n", e->src, e->tgt));
                         break;
                     case MOVE_DELEDGE:
+#ifdef MINIMUM_DEGREE_HEURISTIC
+                        if (currstate->base->vtcs[e->src].deg <= _mindeg
+                            || currstate->base->vtcs[e->tgt].deg <= _mindeg)
+                        {
+                            LOG(("Bruteforce solver - Discarded deletion of edge %d-%d\n",
+                                e->src, e->tgt));
+                            continue;
+                        }
+#endif
+                        nextstate = dup_game(currstate);
                         LOG(("Bruteforce solver - Deleted edge %d-%d\n", e->src, e->tgt));
                         delete_edge(nextstate->base, *e);
                         break;
@@ -2819,13 +2891,14 @@ static char* solve_bruteforce(const game_state* currstate, game_state** solvedst
 #endif
                             ))
     {
-        char* moves = snewn(*movessize, char);
-        LOG(("Bruteforce solver - Found solution\n"));
+        char* moves;
 #ifdef BENCHMARKS
         calc_solver_runtime(begin, clock(), currstate->params);
         assert(find_isomorphism(currstate->minor, currstate->base, NULL, NONE,
                                 currstate->params));
 #endif
+        LOG(("Bruteforce solver - Found solution\n"));
+        moves = snewn(*movessize, char);
         *moves = 'S';
         *moveslen = 1;
         *solvedstate = dup_game(currstate);
