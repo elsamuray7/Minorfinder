@@ -2304,8 +2304,8 @@ static FILE* FINNumReport = NULL;
 static time_t FINNumBeginTimestamp = 0L;
 
 /*
- * Calculate the runtime of an isomorphism test by measuring the difference
- * between the timestamps begin and end
+ * Calculate the runtime of an isomorphism test by measuring the difference between
+ * the timestamps begin and end
  */
 static void calc_isotest_runtime(clock_t begin, clock_t end, enum heuristic heur,
                                 const game_params curr_params)
@@ -2337,6 +2337,9 @@ static void calc_isotest_runtime(clock_t begin, clock_t end, enum heuristic heur
     }
 }
 
+/*
+ * Write an average num report to a text file
+ */
 static void write_num_report(int N, int* NumIterModN, int NumNodesLastN[], int NumPermusLastN[], ulong* NumAvgIdx,
                             double* NumNodesAvg, double* NumPermusAvg, game_params* LastParams, int* _Report, FILE** Report,
                             const char* fn, time_t BeginTimestamp, game_params curr_params)
@@ -2402,6 +2405,10 @@ static void write_num_report(int N, int* NumIterModN, int NumNodesLastN[], int N
     *LastParams = curr_params;
 }
 
+/*
+ * Calculate the number of explored nodes an tested permutations of an isomorphism
+ * test
+ */
 static void calc_isotest_num(int nnodes, int npermus, enum heuristic heur,
                             const game_params curr_params)
 {
@@ -2689,6 +2696,10 @@ static ulong SolverIter = 0UL;
 static int _SRReport = 0;
 static FILE* SRReport = NULL;
 
+/*
+ * Calculate the runtime of the bruteforce solver by measuring the difference between
+ * the timestamps begin and end
+ */
 static void calc_solver_runtime(clock_t begin, clock_t end, const game_params curr_params)
 {
     SolverRuntime = calc_runtime(begin, end, MILLISECS);
