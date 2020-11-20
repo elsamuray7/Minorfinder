@@ -2600,13 +2600,17 @@ static bool find_isomorphism(const graph* the_graph, const graph* cmp_graph,
     while (tmp)
     {
         n = delpos234(lifo, --tmp);
+#ifdef BENCHMARKS
         nnodes++;
+#endif
         LOG(("Fetched node at position %d from the lifo queue\n", tmp));
         if((permu = expand_node(n)))
         {
             mapping* mappings;
             tree234* map = newtree234(mappingcmp);
+#ifdef BENCHMARKS
             npermus++;
+#endif
             found = true;
             LOG(("Found vertex permuation that could be an ismomorphism"\
                 " between the graphs\n"));
