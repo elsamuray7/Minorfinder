@@ -19,7 +19,7 @@
 #include "tree234.h"
 
 /* debug mode */
-#define DEBUGGING false
+#define DEBUGGING true
 
 #define BENCHMARKS
 
