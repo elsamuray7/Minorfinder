@@ -19,9 +19,9 @@
 #include "tree234.h"
 
 /* debug mode */
-#define DEBUGGING true
+#define DEBUGGING false
 
-#define BENCHMARKS
+/*#define BENCHMARKS*/
 
 /* enable or disable console log */
 #if DEBUGGING
