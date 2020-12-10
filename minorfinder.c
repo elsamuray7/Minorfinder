@@ -2082,6 +2082,7 @@ typedef struct node node;
 struct node {
     node* children;
     vertex** cells;
+    tree234* kernel;
     int* cellsizes;
     int ncells;
     int nchildren;
@@ -2089,12 +2090,76 @@ struct node {
 };
 
 /*
+ * Heuristic used to search for an isomorphism between graphs
+ */
+enum heuristic {
+    NONE,
+    DEGREE
+};
+
+/*
+ * Get the index of the cell of a node that contains some vertex or -1 if it
+ * doesn't contain the vertex
+ */
+static int cell_index(vertex* vx, node* n, enum heuristic heur)
+{
+    int i, j;
+
+    for (i = 0; i < n->ncells; i++)
+    {
+        if (heur == DEGREE
+            && n->cells[i]->deg != vx->deg)
+            continue;
+        for (j = 0; j < n->cellsizes[i]; j++)
+        {
+            if (n->cells[i][j].idx == vx->idx)
+            {
+                return i;
+            }
+        }
+    }
+    return -1;
+}
+
+/*
+ * Add all vertices to the kernel of a node that are located in a non-singleton
+ * cell and have at least one adjacency to a vertex in any non-singleton cell
+ */
+static void init_kernel(node* n, const graph* gr, enum heuristic heur)
+{
+    int i, j, k;
+    vertex* vx;
+    edge* e;
+
+    for (i = 0; i < n->ncells; i++)
+    {
+        if (n->cellsizes[i] == 1) continue;
+        for (j = 0; j < n->cellsizes[i]; j++)
+        {
+            vx = n->cells[i] + j;
+            for (k = 0; (e = index234(gr->edges, k)) != NULL; k++)
+            {
+                if ((e->src == vx->idx || e->tgt == vx->idx)
+                    && n->cellsizes[cell_index(gr->vtcs +
+                                                ((e->src == vx->idx) ?
+                                                e->tgt : e->src),
+                                                n, heur)] > 1) {
+                    add234(n->kernel, vx);
+                    break;
+                }
+            }
+        }
+    }
+}
+
+/*
  * Expand a node in an isomorphism search tree or if it is a leaf parse it into a
  * permutation that is candidate to be an isomorphism between two graphs.
  */
-static vertex* expand_node(node* n)
+static vertex* expand_node(node* n, const graph* gr, enum heuristic heur)
 {
     int i, j;
+    vertex* permu;
     
     for (i = 0; i < n->ncells; i++)
     {
@@ -2107,13 +2172,34 @@ static vertex* expand_node(node* n)
     }
     if (n->isleaf)
     {
-        vertex* permu = snewn(n->ncells, vertex);
+        permu = snewn(n->ncells, vertex);
         LOG(("Reached leaf and created corresponding permutation with size %d\n"\
             "The permutation is (", n->ncells));
         for (i = 0; i < n->ncells; i++)
         {
             permu[i] = *n->cells[i];
             LOG(("%d%s", permu[i].idx, (i < n->ncells - 1) ? ", " : ")\n"));
+        }
+        return permu;
+    }
+    else if (!count234(n->kernel))
+    {
+        int tmp = 0;
+        n->isleaf = true;
+        for (i = 0; i < n->ncells; i++)
+        {
+            tmp += n->cellsizes[i];
+        }
+        permu = snewn(tmp, vertex);
+        LOG(("Reached node with empty kernel and created corresponding permutation"\
+            " with size %d\nThe permutation is (", tmp));
+        for (i = 0; i < n->ncells; i++)
+        {
+            for (j = 0; j < n->cellsizes[i]; j++)
+            {
+                permu[i+j] = n->cells[i][j];
+                LOG(("%d%s", permu[i+j].idx, (i+j < tmp-1) ? ", " : ")\n"));
+            }
         }
         return permu;
     }
@@ -2128,6 +2214,7 @@ static vertex* expand_node(node* n)
             child = n->children + i;
             child->ncells = n->ncells + 1;
             child->cells = snewn(child->ncells, vertex*);
+            child->kernel = newtree234(vertcmp);
             child->cellsizes = snewn(child->ncells, int);
             child->isleaf = true;
             LOG(("Initialized child node %d with %d cells\nCreating new refinement"\
@@ -2161,6 +2248,7 @@ static vertex* expand_node(node* n)
                 LOG(("Initialized child cell %d with size %d\n", j, child->cellsizes[j]));
             }
             LOG(("Created new refinement of parent cells for child %d\n", i));
+            init_kernel(child, gr, heur);
         }
         return NULL;
     }
@@ -2184,6 +2272,7 @@ static void free_node(node* n, bool isroot)
     }
     for (i = 0; i < n->ncells; i++) sfree(n->cells[i]);
     sfree(n->cells);
+    freetree234(n->kernel);
     sfree(n->cellsizes);
     if (isroot) sfree(n);
 }
@@ -2225,14 +2314,6 @@ static void* mappingcpy(void* state, void* elem)
     
     return (void*) mcpy;
 }
-
-/*
- * Heuristic used to search for an isomorphism between graphs
- */
-enum heuristic {
-    NONE,
-    DEGREE
-};
 
 /*
  * Continuation of benchmark related structures section
@@ -2530,6 +2611,7 @@ static bool find_isomorphism(const graph* the_graph, const graph* cmp_graph,
     root = snew(node);
     root->ncells = tmp;
     root->cells = snewn(root->ncells, vertex*);
+    root->kernel = newtree234(vertcmp);
     root->cellsizes = snewn(root->ncells, int);
     root->isleaf = true;
     LOG(("Initialized root node with %d cells\n", root->ncells));
@@ -2579,6 +2661,7 @@ static bool find_isomorphism(const graph* the_graph, const graph* cmp_graph,
                 " position %d\n", j, vtcs_cmp[j].idx, vtcs_cmp[j].deg, j));
         }
     }
+    init_kernel(root, cmp_graph, heur);
     sfree(vtcs_cmp);
     tmp = 0;
     lifo = newtree234(NULL);
@@ -2604,7 +2687,7 @@ static bool find_isomorphism(const graph* the_graph, const graph* cmp_graph,
         nnodes++;
 #endif
         LOG(("Fetched node at position %d from the lifo queue\n", tmp));
-        if((permu = expand_node(n)))
+        if((permu = expand_node(n, cmp_graph, heur)))
         {
             mapping* mappings;
             tree234* map = newtree234(mappingcmp);
