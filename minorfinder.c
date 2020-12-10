@@ -2143,7 +2143,8 @@ static void init_kernel(node* n, const graph* gr, enum heuristic heur)
                     && n->cellsizes[cell_index(gr->vtcs +
                                                 ((e->src == vx->idx) ?
                                                 e->tgt : e->src),
-                                                n, heur)] > 1) {
+                                                n, heur)] > 1)
+                {
                     add234(n->kernel, vx);
                     break;
                 }
