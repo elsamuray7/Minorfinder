@@ -2083,6 +2083,7 @@ struct node {
     node* children;
     vertex** cells;
     tree234* kernel;
+    int*** degmat;
     int* cellsizes;
     int ncells;
     int nchildren;
@@ -2154,6 +2155,65 @@ static void init_kernel(node* n, const graph* gr, enum heuristic heur)
 }
 
 /*
+ * Initialize the degree matrix of a node. It consists of vectors for all vertices
+ * in all cells which store the number of neighbours that the vertex has in each of
+ * the cells. The sum of the vector entries is the degree of the vertex.
+ */
+static void init_degmat(node* n, const graph* gr, enum heuristic heur)
+{
+    int i, j, k;
+    vertex* vx;
+    edge* e;
+
+    for (i = 0; i < n->ncells; i++)
+    {
+        n->degmat[i] = snewn(n->cellsizes[i], int*);
+        for (j = 0; j < n->cellsizes[i]; j++)
+        {
+            n->degmat[i][j] = snewn(n->ncells, int);
+            vx = n->cells[i] + j;
+            for (k = 0; k < n->ncells; k++)
+            {
+                n->degmat[i][j][k] = 0;
+            }
+            for (k = 0; (e = index234(gr->edges, k)) != NULL; k++)
+            {
+                if (e->src == vx->idx || e->tgt == vx->idx)
+                {
+                    n->degmat[i][j][cell_index(gr->vtcs +
+                                                ((e->src == vx->idx) ?
+                                                e->tgt : e->src),
+                                                n, heur)]++;
+                }
+            }
+        }
+    }
+}
+
+/*
+ * Check whether this node is equitable, i.e. whether each two vertices v, w in the
+ * same cell have the same number of neighbours in each cell.
+ */
+static bool equitable(node* n)
+{
+    int i, j, k;
+    
+    for (i = 0; i < n->ncells; i++)
+    {
+        for (j = 0; j < n->cellsizes[i]-1; j++)
+        {
+            for (k = 0; k < n->ncells; k++)
+            {
+                if (n->degmat[i][j][k]
+                    != n->degmat[i][j+1][k])
+                    return false;
+            }
+        }
+    }
+    return true;
+}
+
+/*
  * Expand a node in an isomorphism search tree or if it is a leaf parse it into a
  * permutation that is candidate to be an isomorphism between two graphs.
  */
@@ -2183,7 +2243,7 @@ static vertex* expand_node(node* n, const graph* gr, enum heuristic heur)
         }
         return permu;
     }
-    else if (!count234(n->kernel))
+    else if (equitable(n) && !count234(n->kernel))
     {
         int tmp = 0;
         n->isleaf = true;
@@ -2216,6 +2276,7 @@ static vertex* expand_node(node* n, const graph* gr, enum heuristic heur)
             child->ncells = n->ncells + 1;
             child->cells = snewn(child->ncells, vertex*);
             child->kernel = newtree234(vertcmp);
+            child->degmat = snewn(child->ncells, int**);
             child->cellsizes = snewn(child->ncells, int);
             child->isleaf = true;
             LOG(("Initialized child node %d with %d cells\nCreating new refinement"\
@@ -2250,6 +2311,7 @@ static vertex* expand_node(node* n, const graph* gr, enum heuristic heur)
             }
             LOG(("Created new refinement of parent cells for child %d\n", i));
             init_kernel(child, gr, heur);
+            init_degmat(child, gr, heur);
         }
         return NULL;
     }
@@ -2261,7 +2323,7 @@ static vertex* expand_node(node* n, const graph* gr, enum heuristic heur)
  */
 static void free_node(node* n, bool isroot)
 {
-    int i;
+    int i, j;
 
     if (!n->isleaf)
     {
@@ -2274,6 +2336,12 @@ static void free_node(node* n, bool isroot)
     for (i = 0; i < n->ncells; i++) sfree(n->cells[i]);
     sfree(n->cells);
     freetree234(n->kernel);
+    for (i = 0; i < n->ncells; i++)
+    {
+        for (j = 0; j < n->cellsizes[i]; j++)
+            sfree(n->degmat[i][j]);
+        sfree(n->degmat[i]);
+    }
     sfree(n->cellsizes);
     if (isroot) sfree(n);
 }
@@ -2613,6 +2681,7 @@ static bool find_isomorphism(const graph* the_graph, const graph* cmp_graph,
     root->ncells = tmp;
     root->cells = snewn(root->ncells, vertex*);
     root->kernel = newtree234(vertcmp);
+    root->degmat = snewn(root->ncells, int**);
     root->cellsizes = snewn(root->ncells, int);
     root->isleaf = true;
     LOG(("Initialized root node with %d cells\n", root->ncells));
@@ -2663,6 +2732,7 @@ static bool find_isomorphism(const graph* the_graph, const graph* cmp_graph,
         }
     }
     init_kernel(root, cmp_graph, heur);
+    init_degmat(root, cmp_graph, heur);
     sfree(vtcs_cmp);
     tmp = 0;
     lifo = newtree234(NULL);
