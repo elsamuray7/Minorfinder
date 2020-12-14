@@ -2800,7 +2800,8 @@ static char* solve_bruteforce(const game_state* currstate, game_state** solvedst
     {
         return NULL;
     }
-    else if (count234(currstate->base->edges) > count234(currstate->minor->edges))
+    else if (count234(currstate->base->edges) > count234(currstate->minor->edges)
+            && count234(currstate->base->vertices) >= currstate->params.n_min)
     {
         LOG(("Bruteforce solver - Base graph has more vertices and edges than minor"\
             "graph left\n"));
@@ -2822,12 +2823,6 @@ static char* solve_bruteforce(const game_state* currstate, game_state** solvedst
                             continue;
                         }
 #endif
-                        if (count234(currstate->base->vertices) <= currstate->params.n_min)
-                        {
-                            LOG(("Bruteforce solver - Discarded contraction of edge %d-%d\n",
-                                e->src, e->tgt));
-                            continue;
-                        }
                         nextstate = dup_game(currstate);
                         contract_edge(nextstate->base, e->src, e->tgt);
                         LOG(("Bruteforce solver - Contracted edge %d-%d\n", e->src, e->tgt));
