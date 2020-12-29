@@ -2,7 +2,7 @@
 
 ## What this is about
 A simple graph puzzle called <i>Minorensucher</i> or <i>minorfinder</i>.
-The game begins by showing the player a bigger graph (the original graph) and a smaller one (the minor). To solve the puzzle the player has to contract eges untill the original graph is isomorphic to the minor.
+The game begins by showing the player a bigger graph (the original graph) and a smaller one (the minor). To solve the puzzle, the player has to contract edges until the original graph is isomorphic to the minor.
 
 ## Build the game
 ### Generate Unix Makefile
