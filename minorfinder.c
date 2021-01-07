@@ -2786,6 +2786,9 @@ static char* solve_bruteforce(const game_state* currstate, game_state** solvedst
                                 int* movessize, int* moveslen, clock_t begin, int timeout)
 {
     int i, j;
+    int nedges_base = count234(currstate->base->edges);
+    int nedges_min = count234(currstate->minor->edges);
+    int nvertices_base = count234(currstate->base->vertices);
 #ifdef MINIMUM_DEGREE_HEURISTIC
     int _mindeg = minimum_degree(currstate->minor->vertices);
 #endif
@@ -2800,8 +2803,7 @@ static char* solve_bruteforce(const game_state* currstate, game_state** solvedst
     {
         return NULL;
     }
-    else if (count234(currstate->base->edges) > count234(currstate->minor->edges)
-            && count234(currstate->base->vertices) >= currstate->params.n_min)
+    else if (nedges_base > nedges_min && nvertices_base >= currstate->params.n_min)
     {
         LOG(("Bruteforce solver - Base graph has more vertices and edges than minor"\
             "graph left\n"));
@@ -2814,6 +2816,12 @@ static char* solve_bruteforce(const game_state* currstate, game_state** solvedst
                 switch (mvs[j])
                 {
                     case MOVE_CONTREDGE:
+                        if (nvertices_base == currstate->params.n_min)
+                        {
+                            LOG(("Bruteforce solver - Discarded contraction of edge %d-%d\n",
+                                e->src, e->tgt));
+                            continue;
+                        }
 #ifdef SHARED_ADJACENCY_HEURISTIC
                         if (currstate->base->vtcs[e->src].deg + currstate->base->vtcs[e->tgt].deg
                             - shared_adjacency_count(e->src, e->tgt, currstate->base->edges) - 2 < _mindeg)
